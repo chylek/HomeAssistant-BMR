@@ -1,5 +1,27 @@
 # HomeAssistant-BMR
 
+## IMPORTANT INFO
+This is a fork and WORK IN PROGRESS. The original plugin is available [here](https://github.com/slesinger/HomeAssistant-BMR)
+Documentation is not updated yet, but the plugin is working with the latest Home Assistant version and
+the configuration is done via the UI.
+
+Temperature entities are gone, only climate entities and binary sensors are available.
+Every circuit is automatically added as a climate entity, and a binary sensor is added for HDO state.
+Schedules cannot be changed from Home Assistant, only the target temperature can be changed. 
+Changing presets to "away" or the "summer" mode are not tested yet.
+
+**The approach for target temperature override is very different from the original plugin.**
+The integration now uses the BMR-native manual temperature offset feature. The integration checks periodically
+if the temperature override still applies the correct offset from the schedule. If not, it will reapply the override. This means the target temperature cannot be changed using the BMR controller or physical controls on
+the temperature sensors. You have to change it in Home Assistant, otherwise the integration will keep changing it back to its value. You should be always able to remove the override by switching the Climate entity to Auto mode.
+
+Since the BMR Controller works a bit slow when updating the target temperature and the user offset, the integration
+takes its time enforcing it (up to 5 minutes). This is to prevent the controller from getting confused and not applying the offset correctly. 
+
+There are also other changes under the hood - a DataUpdateCoordinator is used to manage the updates efficiently, the plugin is now async, the client library is built-in.
+
+## Original README
+
 Home Assistant integration plugin for [BMR HC64 heating
 controller](https://bmr.cz/produkty/regulace-topeni/rnet). This controller has
 many quirks but overall it is quite usable in Home Assistant.  The plugin

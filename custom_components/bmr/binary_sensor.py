@@ -1,89 +1,60 @@
 """
-Support for BMR HC64 Heating Regulation.
-
-configuration.yaml
-
-binary_sensor:
-  - platform: bmr
-    base_url: http://ip-address/
-    user: user
-    password: password
+Support for BMR HC64 Grid appliance control.
 """
 
 __version__ = "0.7"
 
 import logging
-import socket
-from datetime import timedelta
+from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
-from homeassistant.components.binary_sensor import PLATFORM_SCHEMA, BinarySensorEntity
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.util import Throttle as throttle
+from homeassistant.components.binary_sensor import (
+    BinarySensorEntity,
+    BinarySensorEntityDescription,
+)
+from . import BmrEntity, BmrCoordinator
+from .const import DOMAIN, CONF_DATA_COORDINATOR
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_BASE_URL = "base_url"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_BASE_URL): cv.string,
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-    }
-)
-
-
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    import pybmr
-
-    base_url = config.get(CONF_BASE_URL)
-    user = config.get(CONF_USERNAME)
-    password = config.get(CONF_PASSWORD)
-
-    bmr = pybmr.Bmr(base_url, user, password)
-    sensors = [
-        BmrControllerHDO(bmr),
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the sensor platform."""
+    coordinator = hass.data[DOMAIN][config_entry.entry_id][CONF_DATA_COORDINATOR]
+    entities = [
+        BmrHdoSensor(
+            coordinator, 
+            BinarySensorEntityDescription(
+                name="HDO",
+                key="hdo",
+                icon="mdi:home-lightning-bolt",
+            )
+        )
     ]
 
-    add_entities(sensors)
+    async_add_entities(entities)
 
 
-class BmrControllerHDO(BinarySensorEntity):
+class BmrHdoSensor(BinarySensorEntity, BmrEntity):
     """ Binary sensor for reporting HDO (low/high electricity tariff).
     """
 
-    def __init__(self, bmr):
-        self._bmr = bmr
-        self._hdo = None
+    def __init__(self, coordinator: BmrCoordinator, description: BinarySensorEntityDescription) -> None:
 
-        self._unique_id = f"{self._bmr.getUniqueId()}-binary-sensor-hdo"
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{coordinator.unique_id}-binary-sensor-hdo"
 
-    @property
-    def name(self):
-        """ Return the name of the sensor.
-        """
-        return "BMR HC64 HDO"
-
-    @property
-    def unique_id(self):
-        """ Return unique ID of the entity.
-        """
-        return self._unique_id
-
-    @property
+    @ property
     def is_on(self):
         """ Return the state of the sensor.
         """
-        return bool(self._hdo)
-
-    @throttle(timedelta(seconds=30))
-    def update(self):
-        """ Fetch new state data for the sensor.
-            This is the only method that should fetch new data for Home Assistant.
-        """
         try:
-            self._hdo = self._bmr.getHDO()
-        except socket.timeout:
-            _LOGGER.warn("Read from BMR HC64 controller timed out. Retrying later.")
+            return bool(self.coordinator.data["hdo"])
+        except Exception:
+            return None
