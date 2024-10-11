@@ -6,12 +6,10 @@ from datetime import datetime, date, timedelta
 
 from hashlib import sha256
 import re
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, TypedDict
 from asyncache import cached
 from cachetools import TTLCache, LRUCache
-# from requests.adapters import HTTPAdapter
-# from requests.packages.urllib3.util.retry import Retry
-# from requests_toolbelt import sessions
+from homeassistant.helpers.storage import Store
 from aiohttp import ClientSession, FormData
 import logging
 
@@ -28,7 +26,7 @@ class AuthException(Exception):
     pass
 
 
-TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how many seconds to wait before checking for new temperature overrides
+TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how much time to wait before checking for new temperature overrides
 
 
 class TemperatureOverride:
@@ -48,19 +46,16 @@ class TemperatureOverride:
     def __repr__(self):
         return str(self.__dict__)
 
+
 class Bmr:
     def __init__(
         self,
-        base_url,
-        user,
-        password,
+        base_url: str,
+        user: str,
+        password: str,
         session: ClientSession,
-        overrides,
-        overrides_store,
-        timeout=HTTP_DEFAULT_TIMEOUT,
-        max_retries=HTTP_DEFAULT_MAX_RETRIES,
-        cache_maxsize=CACHE_DEFAULT_MAXSIZE,
-        cache_ttl=CACHE_DEFAULT_TTL,
+        overrides: Optional[Dict[int, Dict[str, Any]]] = None,
+        overrides_store: Optional[Store[Any]] = None,
     ):
         self._user = user
         self._password = password
@@ -71,8 +66,6 @@ class Bmr:
         self.overrides_store = overrides_store
         self.session = session
         self.base_url = base_url
-        self._cache_maxsize = cache_maxsize
-        self._cache_ttl = cache_ttl
 
     async def authenticate(self):
         """Login to BMR controller. Note that BMR controller is using a kinda
@@ -80,7 +73,7 @@ class Bmr:
         just remembering the username and IP address of the logged-in user.
         """
 
-        def bmr_hash(value):
+        def bmr_hash(value: str) -> str:
             output = ""
             day = date.today().day
             for c in value:
@@ -144,8 +137,9 @@ class Bmr:
         if current_target is None:  # if current_target temperature is not provided, try to get it
             current_settings = await self.getCircuit(circuit_id, skip_override_check=True)
             # the caveat is that the target already contains the user offset, so we need to subtract it...
-            current_target = current_settings["target_temperature"] - current_settings["user_offset"]
-            if current_target is None:
+            if current_settings["target_temperature"] is not None and current_settings["user_offset"] is not None:
+                current_target = current_settings["target_temperature"] - current_settings["user_offset"]
+            else:
                 current_target = new_target  # this will create a zero offset
         offset = new_target - current_target
         param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", int(abs(offset)*10))
@@ -180,7 +174,10 @@ class Bmr:
 
     async def storeOverrides(self):
         """Store overrides to the store."""
-        await self.overrides_store.async_save(dict((k, v.serialize()) for k, v in self.overrides.items()))
+        if self.overrides_store is not None:
+            await self.overrides_store.async_save(dict((k, v.serialize()) for k, v in self.overrides.items()))
+        else:
+            _LOGGER.warning("No overrides store provided, overrides won't be stored.")
 
     async def removeTemperatureOverride(self, circuit_id: int):
         """Remove temperature override for a circuit."""
@@ -190,7 +187,7 @@ class Bmr:
             # do the call
             await self.getCircuit(circuit_id)
 
-    async def getCircuit(self, circuit_id: int, skip_override_check: bool = False):
+    async def getCircuit(self, circuit_id: int, skip_override_check: bool = False) -> "BmrCircuitData":
         """Get circuit status.
 
         Raw data returned from server:
@@ -253,7 +250,7 @@ class Bmr:
         room_status = match.groupdict()
 
         # Sometimes some of the values are malformed, i.e. "00\x00\x00\x00" or "-1-1-"
-        result = {
+        result: BmrCircuitData = {
             "id": circuit_id,
             "enabled": bool(int(room_status["enabled"])),
             "name": room_status["name"].rstrip(),
@@ -266,6 +263,7 @@ class Bmr:
             "cooling": False,
             "low_mode": False,
             "summer_mode": False,
+            "target_temperature_raw": None,
         }
 
         for key in (
@@ -378,7 +376,6 @@ class Bmr:
             "name": schedule["name"].rstrip(),
             "timetable": timetable,
         }
-
 
     async def setSchedule(self, schedule_id: int, name: str, timetable):
         """Save schedule settings. Name is the new schedule name. Timetable is
@@ -495,7 +492,7 @@ class Bmr:
                 return None
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
-    async def getLowMode(self):
+    async def getLowMode(self) -> "BmrLowModeData":
         """Get status of the LOW mode."""
         await self.authenticate()
         headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
@@ -522,9 +519,11 @@ class Bmr:
                 )
             )
         low_mode = match.groupdict()
-        result = {
+        result: BmrLowModeData = {
             "enabled": low_mode["start_datetime"] is not None,
             "temperature": int(low_mode["temperature"]),
+            "start_date": None,
+            "end_date": None,
         }
         if low_mode["start_datetime"]:
             result["start_date"] = datetime.strptime(
@@ -537,7 +536,11 @@ class Bmr:
         return result
 
     async def setLowMode(
-        self, enabled:bool, temperature:Optional[float]=None, start_datetime:Optional[datetime]=None, end_datetime:Optional[datetime]=None
+        self,
+        enabled: bool,
+        temperature: Optional[float] = None,
+        start_datetime: Optional[datetime] = None,
+        end_datetime: Optional[datetime] = None
     ):
         """Enable or disable LOW mode. Temperature specified the desired
         temperature for the LOW mode.
@@ -882,7 +885,7 @@ class Bmr:
             "ppm": ppm
         }
 
-    async def getAllData(self) -> Dict[str, Any]:
+    async def getAllData(self) -> "BmrAllData":
         """Get all data from the BMR controller."""
         # iterate over all circuits and get their data
         circuits = []
@@ -902,3 +905,34 @@ class Bmr:
             "summer_mode": summer_mode,
             "low_mode": low_mode,
         }
+
+
+class BmrCircuitData(TypedDict):
+    id: int
+    enabled: bool
+    name: str
+    temperature: Optional[float]
+    target_temperature: Optional[float]
+    user_offset: Optional[float]
+    max_offset: Optional[float]
+    heating: bool
+    warning: int
+    cooling: bool
+    low_mode: bool
+    summer_mode: bool
+    target_temperature_raw: Optional[float]
+
+
+class BmrLowModeData(TypedDict):
+    enabled: bool
+    temperature: int
+    start_date: Optional[datetime]
+    end_date: Optional[datetime]
+
+
+class BmrAllData(TypedDict):
+    circuits: List[BmrCircuitData]
+    hdo: bool
+    ventilation: Dict[str, int]
+    summer_mode: bool
+    low_mode: BmrLowModeData

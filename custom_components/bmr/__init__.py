@@ -1,5 +1,3 @@
-"""The myenyaq integration."""
-
 from __future__ import annotations
 from datetime import timedelta
 from typing import Any, Dict
@@ -14,7 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, CONF_DATA_COORDINATOR
-from .client import Bmr
+from .client import Bmr, BmrAllData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-class BmrCoordinator(DataUpdateCoordinator):
+class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
     """My custom coordinator."""
 
     def __init__(self, hass: HomeAssistant, client: Bmr) -> None:
@@ -69,7 +67,7 @@ class BmrCoordinator(DataUpdateCoordinator):
         self.client = client
         self.unique_id = "unk"
 
-    async def _async_update_data(self) -> Dict[str, Any]:
+    async def _async_update_data(self) -> BmrAllData:
         """Fetch data from API endpoint.
 
         This is the place to pre-process the data to lookup tables
@@ -86,8 +84,8 @@ class BmrCoordinator(DataUpdateCoordinator):
             return data
 
 
-class BmrEntity(CoordinatorEntity):
-    """Defines a base Enyaq entity."""
+class BmrEntity(CoordinatorEntity[BmrCoordinator]):
+    """Defines a base BMR entity."""
 
     def __init__(self, coordinator: BmrCoordinator) -> None:
         """Initialize the entity."""
