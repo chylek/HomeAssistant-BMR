@@ -28,11 +28,12 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][config_entry.entry_id][CONF_DATA_COORDINATOR]
     entities = [
         BmrHdoSensor(
-            coordinator, 
+            coordinator,
             BinarySensorEntityDescription(
-                name="HDO",
+                name="HDO - nízký tarif",
                 key="hdo",
                 icon="mdi:home-lightning-bolt",
+                translation_key="hdo",
             )
         )
     ]

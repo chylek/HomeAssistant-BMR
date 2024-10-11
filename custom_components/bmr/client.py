@@ -703,7 +703,7 @@ class Bmr:
                 ),
             )
         }
-        
+
         await self.authenticate()
         async with self.session.post(f"{self.base_url}/saveAssignmentModes", headers=headers, data=FormData(data)) as response:
             if response.status != 200:
