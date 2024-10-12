@@ -320,6 +320,7 @@ class Bmr:
                     # but we can't do anything about it. The BMR web itself gets confused while updating the offset.
                     # It would be nice to have an "unknown" state for this, but I don't think we can do that.
                     result["user_offset"] = 0
+                    result["target_temperature"] = result["target_temperature_raw"]
                     if override.disabled_at is None:  # we have not disabled the override yet, so let's do it
                         # go back to the original temperature by setting zero offset
                         _LOGGER.debug(f"Override is over for circuit {circuit_id}, setting zero offset.")
