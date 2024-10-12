@@ -1,40 +1,15 @@
 """
 Support for BMR HC64 Heating Regulation.
-
-configuration.yaml
-
-  climate:
-    - platform: bmr
-      base_url: http://192.168.1.254/
-      username: !secret bmr_username
-      password: !secret bmr_password
-      away_temperature: 18
-      min_temperature: 18
-      max_temperature: 35
-      circuits:
-        - name: Kitchen
-          circuit: 8
-          schedule:
-            day_schedules: [1]
-            starting_day: 1
-          schedule_override: 16
-          min_temperature: 20
-          max_temperature: 24
 """
 
-__version__ = "0.7"
-
 import logging
-import socket
-from datetime import timedelta
-
-import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import BmrEntity, BmrCoordinator
+from .client import BmrCircuitData
 from .const import DOMAIN, CONF_DATA_COORDINATOR
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityDescription, ClimateEntityFeature
@@ -84,22 +59,21 @@ async def async_setup_entry(
 
 
 class BmrClimateEntity(ClimateEntity, BmrEntity):
-    """ Entity representing a room heated by the BMR HC64 controller unit.
+    """ Entity representing a circuit heated by the BMR HC64 controller unit.
 
         Usually the room has two temperature sensors (circuits): floor and room
-        sensor.  The controller will heat the room if BOTH sensors report lower
-        current temperature then their target temperature.
+        sensor. Since the heating usually happens using only one element (e.g.
+        floor heating cables) the controller will heat the room if BOTH sensors
+        report lower current temperature then their target temperature. This is
+        not always the case, since e.g. bathroom floor heating and bathroom air
+        heating can have each their own heating element.
 
         For simplicity it is recommended to set the floor sensor to a fixed
         temperature that is almost always higher than the actual floor
-        temperature (e.g. 32 degrees) so that the floor sensor always "wants"
-        to heat the room. This way the room temperature can be easily
-        controlled just by the room sensor.
-
-        This HA entity takes advantage of this approach. It will only modify
-        settings related to the room cirtuit and will not touch settings of the
-        floor circuit. It is up to the user to configure the floor circuit
-        using the HC64 web UI.
+        temperature and only limits the maximum temperature suitable for
+        your flooring (e.g. 27 degrees). If you on the other hand want to
+        keep the floor at a constant temperature you can set the floor sensor
+        to your desired temperature and the room sensor to a much higher value.
 
         This class supports the following HVAC modes:
 
@@ -143,7 +117,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             self._enable_turn_on_off_backwards_compatibility = True
 
     @property
-    def circuit(self) -> Dict[str, Any]:
+    def circuit(self) -> Union[BmrCircuitData, Dict[str, None]]:
         if (
             self.coordinator.data
             and "circuits" in self.coordinator.data

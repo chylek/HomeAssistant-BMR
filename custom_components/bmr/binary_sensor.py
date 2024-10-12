@@ -1,9 +1,6 @@
 """
 Support for BMR HC64 Grid appliance control.
 """
-
-__version__ = "0.7"
-
 import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry

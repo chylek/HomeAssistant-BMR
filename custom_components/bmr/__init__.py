@@ -1,6 +1,5 @@
 from __future__ import annotations
 from datetime import timedelta
-from typing import Any, Dict
 import logging
 
 import async_timeout
@@ -16,8 +15,6 @@ from .client import Bmr, BmrAllData
 
 _LOGGER = logging.getLogger(__name__)
 
-# TODO List the platforms that you want to support.
-# For your initial PR, limit it to 1 platform.
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
@@ -76,10 +73,6 @@ class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
         async with async_timeout.timeout(20):
-            # Grab active context variables to limit data required to be fetched from API
-            # Note: using context is not required if there is no need or ability to limit
-            # data retrieved from API.
-            # listening_idx = set(self.async_contexts())
             data = await self.client.getAllData()
             return data
 

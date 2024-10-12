@@ -1,4 +1,4 @@
-# Author: Honza Slesinger
+# Author: Honza Slesinger, Adam Chylek
 # Tested with:
 #    BMR HC64 v2013
 
