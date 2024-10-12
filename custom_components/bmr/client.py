@@ -35,6 +35,7 @@ class TemperatureOverride:
         self.last_set = created_at
         self.temperature = temperature
         self.stop_at = stop_at
+        self.disabled_at: Optional[datetime] = None
 
     def serialize(self) -> Dict[str, Any]:
         return {
@@ -264,6 +265,7 @@ class Bmr:
             "low_mode": False,
             "summer_mode": False,
             "target_temperature_raw": None,
+            "override_updating": False,
         }
 
         for key in (
@@ -311,12 +313,24 @@ class Bmr:
                         _LOGGER.debug(f"Override check shows that the target temperature for circuit {circuit_id} should be {override.temperature} instead of {result['target_temperature_raw']}")
                         # we have everything we need to set the manual offset of the temperature
                         await self.setManualTemp(circuit_id, override.temperature, result['target_temperature_raw'] - result['user_offset'])
-                elif override.stop_at <= datetime.now():
-                    # go back to the original temperature by setting zero offset
-                    _LOGGER.debug(f"Override is over for circuit {circuit_id}, setting zero offset.")
-                    await self.setManualTemp(circuit_id, 0, 0)
-                    del self.overrides[circuit_id]
-                    await self.storeOverrides()
+                elif override.stop_at <= datetime.now():  # the override has expired
+                    # the controller can take some time updating the offset,
+                    # but we will already force it to report a zero offset (meaning we are back on scheduled temp)
+                    # FIXME this can misreport a user offset that was set using the physical buttons or BMR's web UI,
+                    # but we can't do anything about it. The BMR web itself gets confused while updating the offset.
+                    # It would be nice to have an "unknown" state for this, but I don't think we can do that.
+                    result["user_offset"] = 0
+                    if override.disabled_at is None:  # we have not disabled the override yet, so let's do it
+                        # go back to the original temperature by setting zero offset
+                        _LOGGER.debug(f"Override is over for circuit {circuit_id}, setting zero offset.")
+                        await self.setManualTemp(circuit_id, 0, 0)
+                        # mark the override as disabled
+                        self.overrides[circuit_id].disabled_at = datetime.now()
+                    elif override.disabled_at < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
+                        # the override will stay in the disabled state for some time to enforce the 0 offset
+                        # once the override expires completely, we have to remove the override from the list
+                        del self.overrides[circuit_id]
+                        await self.storeOverrides()
             except Exception:
                 pass
         return result
@@ -909,18 +923,19 @@ class Bmr:
 
 class BmrCircuitData(TypedDict):
     id: int
-    enabled: bool
-    name: str
-    temperature: Optional[float]
-    target_temperature: Optional[float]
-    user_offset: Optional[float]
-    max_offset: Optional[float]
-    heating: bool
-    warning: int
-    cooling: bool
-    low_mode: bool
-    summer_mode: bool
-    target_temperature_raw: Optional[float]
+    enabled: bool   # True if the circuit is enabled
+    name: str       # name of the circuit
+    temperature: Optional[float]  # current temperature
+    target_temperature: Optional[float]  # target temperature, including user_offset if applied
+    user_offset: Optional[float]  # manual offset applied by the user to the scheduled temperature
+    max_offset: Optional[float]   # maximum user offset allowed by the system
+    heating: bool   # True if the circuit is currently heating
+    warning: int    # warning code
+    cooling: bool   # True if the circuit is currently cooling
+    low_mode: bool  # True if low mode is applied to the circuit
+    summer_mode: bool  # True if summer mode is applied to the circuit
+    target_temperature_raw: Optional[float]  # the temperature as the unit passes it, no the modifications by overrides
+    override_updating: bool  # True if the temperature override is waiting to be set and reporting may be inaccurate
 
 
 class BmrLowModeData(TypedDict):

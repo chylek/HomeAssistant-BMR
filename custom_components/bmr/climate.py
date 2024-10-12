@@ -3,7 +3,7 @@ Support for BMR HC64 Heating Regulation.
 """
 
 import logging
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -117,7 +117,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             self._enable_turn_on_off_backwards_compatibility = True
 
     @property
-    def circuit(self) -> Union[BmrCircuitData, Dict[str, None]]:
+    def circuit(self) -> Union[BmrCircuitData, None]:
         if (
             self.coordinator.data
             and "circuits" in self.coordinator.data
@@ -125,7 +125,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
            ):
             return self.coordinator.data["circuits"][self._idx]
         else:
-            return dict()
+            return None
 
     @property
     def temperature_unit(self):
@@ -184,7 +184,9 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             Return HVACMode.AUTO if the controller is managing everything
             automatically according to its configuration.
         """
-        if self.circuit and self.circuit.get("summer_mode"):
+        if not self.circuit:
+            return HVACMode.OFF
+        if self.circuit.get("summer_mode"):
             return HVACMode.OFF
         elif self.circuit.get("user_offset"):
             if self._can_cool:
@@ -240,6 +242,8 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             #
             # - Assign normal schedules to the circuit
             await self.coordinator.client.removeTemperatureOverride(self._idx)
+            if self.circuit and self.circuit.get("user_offset") is not None:
+                self.circuit["user_offset"] = 0.0  # imitate immediate change in user offset
 
         if hvac_mode == HVACMode.AUTO:
             # Turn on the HVACMode.AUTO. Currently this is no-op, as the
@@ -250,6 +254,8 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
     def hvac_action(self):
         """ What is the climate device currently doing (cooling, heating, idle).
         """
+        if not self.circuit:
+            return HVACAction.OFF
         if self.circuit.get("summer_mode"):
             return HVACAction.OFF
         elif self.circuit.get("heating"):
@@ -269,7 +275,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
     def preset_mode(self):
         """ Current preset mode.
         """
-        if self.circuit.get("low_mode"):
+        if self.circuit and self.circuit.get("low_mode"):
             return PRESET_AWAY
         else:
             return PRESET_NORMAL
