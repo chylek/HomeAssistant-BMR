@@ -236,6 +236,10 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
                 _LOGGER.debug(f"Setting HVAC mode to {hvac_mode} with temperature {t}")
                 if t is not None:
                     await self.coordinator.client.setTemperatureOverride(self._idx, t)
+            else:  # this was called automatically when changing the temperature
+                _LOGGER.debug(f"Setting HVAC mode to {hvac_mode} automatically")
+                if self.circuit:
+                    self.circuit["user_offset"] = 1.0  # imitate immediate change so the UI reports correct mode
         else:
             # Turn off the HVACMode.HEAT/HVACMode.HEAT_COOL and restore
             # normal operation.
