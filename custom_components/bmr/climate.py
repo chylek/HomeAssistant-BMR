@@ -122,7 +122,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             self.coordinator.data
             and "circuits" in self.coordinator.data
             and len(self.coordinator.data["circuits"]) > self._idx
-           ):
+        ):
             return self.coordinator.data["circuits"][self._idx]
         else:
             return None
@@ -198,7 +198,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # configured schedules.
             return HVACMode.AUTO
 
-    async def async_set_hvac_mode(self, hvac_mode: str, automatic: bool = False):
+    async def async_set_hvac_mode(self, hvac_mode: str):
         """ Set HVAC mode.
         """
         if hvac_mode == HVACMode.OFF:
@@ -231,15 +231,12 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # schedule to the circuit. The "override" schedule is used for
             # setting the custom target temperature (see set_temperature()
             # below).
-            if not automatic:  # Don't set the override if the HVAC mode is set automatically by temperature change
-                t = self.target_temperature
-                _LOGGER.debug(f"Setting HVAC mode to {hvac_mode} with temperature {t}")
-                if t is not None:
-                    await self.coordinator.client.setTemperatureOverride(self._idx, t)
-            else:  # this was called automatically when changing the temperature
-                _LOGGER.debug(f"Setting HVAC mode to {hvac_mode} automatically")
-                if self.circuit:
-                    self.circuit["user_offset"] = 1.0  # imitate immediate change so the UI reports correct mode
+            t = self.target_temperature
+            _LOGGER.debug(f"Setting HVAC mode to {hvac_mode} with temperature {t}")
+            if t is not None:
+                await self.coordinator.client.setTemperatureOverride(self._idx, t)
+                # fetch new state
+                await self.coordinator.async_request_refresh()
         else:
             # Turn off the HVACMode.HEAT/HVACMode.HEAT_COOL and restore
             # normal operation.
@@ -253,6 +250,8 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # Turn on the HVACMode.AUTO. Currently this is no-op, as the
             # normal operation is restored in the else branches above.
             pass
+        # since we've made some requests to the controller we better fetch the new state
+        await self.coordinator.async_request_refresh()
 
     @property
     def hvac_action(self):
@@ -308,10 +307,13 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         if temperature:
             await self.coordinator.client.setTemperatureOverride(self._idx, temperature)
         if self.hvac_mode not in (HVACMode.HEAT, HVACMode.HEAT_COOL):
-            if self._can_cool:
-                await self.async_set_hvac_mode(HVACMode.HEAT_COOL, True)
-            else:
-                await self.async_set_hvac_mode(HVACMode.HEAT, True)
+            if self.circuit:
+                # this is a hack that set's the user offset to non-zero value
+                # so the UI reports the correct HVAC mode (it is derived from the user offset)
+                self.circuit["user_offset"] = 1.0
+                self.circuit["target_temperature"] = temperature
+                # update just the UI
+                self.async_schedule_update_ha_state()
 
     async def async_turn_off(self) -> None:
         await self.async_set_hvac_mode(HVACMode.OFF)
