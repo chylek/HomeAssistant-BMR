@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpda
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, CONF_DATA_COORDINATOR
+from .const import DOMAIN, CONF_DATA_COORDINATOR, CONF_CAN_COOL
 from .client import Bmr, BmrAllData
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,7 +28,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = Store(hass, 1, f"bmr_overrides_{entry.entry_id}")
     overrides = await store.async_load()
     client = Bmr(entry.data[CONF_URL], entry.data[CONF_USERNAME],
-                 entry.data[CONF_PASSWORD], async_get_clientsession(hass), overrides, store)
+                 entry.data[CONF_PASSWORD], entry.data.get(CONF_CAN_COOL, False),
+                 async_get_clientsession(hass), overrides, store)
 
     coordinator = BmrCoordinator(hass, client)
     coordinator.unique_id = await client.getUniqueId()

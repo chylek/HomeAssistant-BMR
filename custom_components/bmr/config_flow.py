@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant import config_entries
 
-from .const import DOMAIN, CannotConnect
+from .const import DOMAIN, CannotConnect, CONF_CAN_COOL
 from .client import Bmr, AuthException
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
         vol.Required(CONF_URL): str,
+        vol.Required(CONF_CAN_COOL): bool,
     }
 )
 
@@ -41,7 +42,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # )
     # client = Client(data[CONF_USERNAME], data[CONF_PASSWORD], session)
     session = async_get_clientsession(hass)
-    client = Bmr(data[CONF_URL], data[CONF_USERNAME], data[CONF_PASSWORD], session)
+    client = Bmr(data[CONF_URL], data[CONF_USERNAME], data[CONF_PASSWORD], data.get(CONF_CAN_COOL, False), session)
 
     num_circuits = await client.getNumCircuits()
     circuit_names = await client.getCircuitNames()

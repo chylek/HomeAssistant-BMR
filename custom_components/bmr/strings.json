@@ -1,21 +1,23 @@
 {
+  "title": "BMR HC64",
   "config": {
     "step": {
       "user": {
         "data": {
-          "url": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "url": "URL",
+          "username": "Uživatelské jméno",
+          "password": "Heslo",
+          "can_cool": "Podporuje chlazení"
         }
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Nepodařilo se připojit.",
+      "invalid_auth": "Nesprávné přihlašovací údaje.",
+      "unknown": "Neznámá chyba."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "Zařízení už bylo nastaveno."
     }
   },
   "entity": {

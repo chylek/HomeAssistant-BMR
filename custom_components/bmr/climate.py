@@ -106,7 +106,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.unique_id}-climate-{idx}"
         self._idx = idx
-        self._can_cool = False  # TODO configurable
+        self._can_cool = coordinator.client.can_cool
         # check if TURN_OFF is a possible value of ClimateEntityFeature
 
         self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
@@ -145,7 +145,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
     def target_temperature(self):
         """ Currently set target temperature.
         """
-        if self.circuit:
+        if self.circuit and not (self.circuit.get("summer_mode") and self.coordinator.data.get("summer_mode")):
             return self.circuit.get("target_temperature")
         return None
 
@@ -186,7 +186,8 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         """
         if not self.circuit:
             return HVACMode.OFF
-        if self.circuit.get("summer_mode"):
+        if self.coordinator.data.get("summer_mode") and self.circuit.get("summer_mode"):
+            # The circuit is assigned to a summer mode and the summer mode is enabled.
             return HVACMode.OFF
         elif self.circuit.get("user_offset"):
             if self._can_cool:
@@ -201,6 +202,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
     async def async_set_hvac_mode(self, hvac_mode: str):
         """ Set HVAC mode.
         """
+        _LOGGER.debug(f"Setting HVAC mode to {hvac_mode}. Summer mode: {self.coordinator.data.get('summer_mode')}")
         if hvac_mode == HVACMode.OFF:
             # Turn on the HVACMode.OFF. This will turn off the heating/cooling
             # of the given circuit. This works by:
@@ -222,7 +224,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # - Remove the circuit from the summer mode assignments
             # - If there aren't any circuits assigned to summer mode anymore
             #   turn the summer mode OFF.
-            assignments = await self.coordinator.client.setSummerModeAssignments([self._idx], True)
+            assignments = await self.coordinator.client.setSummerModeAssignments([self._idx], False)
             if assignments is not None and not any(assignments):
                 await self.coordinator.client.setSummerMode(False)
 
