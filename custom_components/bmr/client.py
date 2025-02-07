@@ -55,12 +55,14 @@ class Bmr:
         base_url: str,
         user: str,
         password: str,
+        can_cool: bool,
         session: ClientSession,
         overrides: Optional[Dict[int, Dict[str, Any]]] = None,
         overrides_store: Optional[Store[Any]] = None,
     ):
         self._user = user
         self._password = password
+        self.can_cool = can_cool
         self.overrides: Dict[int, TemperatureOverride] = {}
         if overrides is not None:
             for key, value in overrides.items():

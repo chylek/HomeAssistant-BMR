@@ -106,7 +106,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.unique_id}-climate-{idx}"
         self._idx = idx
-        self._can_cool = False  # TODO configurable
+        self._can_cool = coordinator.client.can_cool
         # check if TURN_OFF is a possible value of ClimateEntityFeature
 
         self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
