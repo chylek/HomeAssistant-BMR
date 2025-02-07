@@ -489,7 +489,7 @@ class Bmr:
         other circuits as they are.
         """
         await self.authenticate()
-        assignments = self.getSummerModeAssignments()
+        assignments = await self.getSummerModeAssignments()
 
         for circuit_id in circuits:
             assignments[circuit_id] = value
