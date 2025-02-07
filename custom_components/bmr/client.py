@@ -192,6 +192,10 @@ class Bmr:
             self.overrides[circuit_id].stop_at = datetime.now()-timedelta(seconds=1)
             # do the call
             await self.getCircuit(circuit_id)
+        else:
+            # there was no override from our side, must have been from the physical buttons or BMR's web UI
+            # let's remove the user offset then
+            await self.setManualTemp(circuit_id, 0, 0)
 
     @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getCircuit(self, circuit_id: int, skip_override_check: bool = False) -> "BmrCircuitData":
@@ -275,12 +279,8 @@ class Bmr:
         }
 
         for key in (
+            "target_temperature",
             "temperature",
-            "heating",
-            "cooling",
-            "warning",
-            "low_mode",
-            "summer_mode",
             "user_offset",
             "max_offset",
         ):
@@ -288,21 +288,25 @@ class Bmr:
                 result[key] = float(room_status[key])
             except ValueError:
                 pass
-        try:
-            # If summer mode is turned on (which means the system is powered
-            # down) we will return target temperature as `None`, not 0 degrees
-            #
-            # Also ignore and set it to None if target temperature is 0
-            # degrees. That is most likely a nonsense reported when the
-            # heating controller is reloading configuration.
-            if not bool(int(room_status["summer_mode"])):
-                result["target_temperature"] = (
-                    float(room_status["target_temperature"]) or None
-                )
-            else:
-                result["target_temperature"] = None
-        except ValueError:
-            pass
+
+        for key in (
+            "heating",
+            "cooling",
+            "low_mode",
+            "summer_mode",
+        ):
+            try:
+                result[key] = bool(int(room_status[key]))
+            except ValueError:
+                pass
+
+        for key in (
+            "warning",
+        ):
+            try:
+                result[key] = int(room_status[key])
+            except ValueError:
+                pass
 
         result["target_temperature_raw"] = result["target_temperature"]  # if overrides are active, this will be the temperature as the unit presents it
         if not skip_override_check and circuit_id in self.overrides and result["target_temperature"] is not None:
@@ -455,7 +459,12 @@ class Bmr:
                 raise Exception(
                     f"Server returned status code {response.status}"
                 )
-            return await response.text() == "0"
+            val = await response.text()
+            try:
+                return not bool(int(val))  # for some reason 0 == summer mode on, 1 == summer mode off
+            except ValueError:
+                _LOGGER.warning("Summer mode is not a boolean.")
+                return False
 
     async def setSummerMode(self, value:bool):
         """Enable or disable summer mode."""
@@ -495,6 +504,7 @@ class Bmr:
         """Assign or remove specified circuits to/from summer mode. Leave
         other circuits as they are.
         """
+        _LOGGER.debug(f"Setting summer mode for circuits {circuits} to {value}")
         await self.authenticate()
         assignments = await self.getSummerModeAssignments()
 
