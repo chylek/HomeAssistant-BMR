@@ -1,0 +1,35 @@
+{
+    "title": "BMR HC64",
+    "config": {
+      "step": {
+        "user": {
+          "data": {
+            "url": "URL",
+            "username": "Uživatelské jméno",
+            "password": "Heslo",
+            "can_cool": "Podporuje chlazení"
+          }
+        }
+      },
+      "error": {
+        "cannot_connect": "Nepodařilo se připojit.",
+        "invalid_auth": "Nesprávné přihlašovací údaje.",
+        "unknown": "Neznámá chyba."
+      },
+      "abort": {
+        "already_configured": "Zařízení už bylo nastaveno."
+      }
+    },
+    "entity": {
+      "binary_sensor": {
+        "hdo": {
+          "name": "HDO - nízký tarif"
+        }
+      },
+      "sensor": {
+        "ventilation_speed": {
+          "name": "Ventilace"
+        }
+      }
+    }
+  }

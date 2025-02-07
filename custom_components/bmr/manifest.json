@@ -7,5 +7,6 @@
     "config_flow": true,
     "iot_class": "local_polling",
     "version": "2.0.0b3",
-    "requirements": ["requests-toolbelt", "cachetools", "requests", "asyncache", "backoff"]
+    "requirements": ["requests-toolbelt", "cachetools", "requests", "asyncache", "backoff"],
+    "translations": ["translations"]
   }
