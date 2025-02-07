@@ -72,7 +72,7 @@ class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
         """
         # Note: asyncio.TimeoutError and aiohttp.ClientError are already
         # handled by the data update coordinator.
-        async with async_timeout.timeout(20):
+        async with async_timeout.timeout(30):
             data = await self.client.getAllData()
             return data
 
