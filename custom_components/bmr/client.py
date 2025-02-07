@@ -2,16 +2,17 @@
 # Tested with:
 #    BMR HC64 v2013
 
-from datetime import datetime, date, timedelta
-
-from hashlib import sha256
-import re
-from typing import Any, Dict, Optional, List, TypedDict
-from asyncache import cached
-from cachetools import TTLCache, LRUCache
-from homeassistant.helpers.storage import Store
-from aiohttp import ClientSession, FormData
 import logging
+import re
+from datetime import date, datetime, timedelta
+from hashlib import sha256
+from typing import Any, Dict, List, Optional, TypedDict
+
+import backoff
+from aiohttp import ClientSession, FormData
+from asyncache import cached
+from cachetools import LRUCache, TTLCache
+from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class Bmr:
         self.session = session
         self.base_url = base_url
 
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def authenticate(self):
         """Login to BMR controller. Note that BMR controller is using a kinda
         weird and insecure authentication mechanism - it looks like it's
@@ -104,6 +106,7 @@ class Bmr:
         ).hexdigest()[:8]
 
     @cached(LRUCache(maxsize=1))
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getNumCircuits(self):
         """Get the number of heating circuits."""
         await self.authenticate()
@@ -188,6 +191,7 @@ class Bmr:
             # do the call
             await self.getCircuit(circuit_id)
 
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getCircuit(self, circuit_id: int, skip_override_check: bool = False) -> "BmrCircuitData":
         """Get circuit status.
 
@@ -439,6 +443,7 @@ class Bmr:
             return "true" in await response.text()
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getSummerMode(self):
         """Return True if summer mode is currently activated."""
         await self.authenticate()
@@ -507,6 +512,7 @@ class Bmr:
                 return None
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getLowMode(self) -> "BmrLowModeData":
         """Get status of the LOW mode."""
         await self.authenticate()
@@ -728,6 +734,7 @@ class Bmr:
             return "true" in await response.text()
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getHDO(self):
         """Get status of the HDO (remote grid control) mode."""
         await self.authenticate()
@@ -880,6 +887,7 @@ class Bmr:
             return False
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
+    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
     async def getVentilation(self) -> Dict[str, int]:
         """
         Get the status of the ventilation system.
