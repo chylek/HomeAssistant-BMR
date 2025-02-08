@@ -31,19 +31,47 @@ TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how much time to wait before 
 
 
 class TemperatureOverride:
-    def __init__(self, temperature: float, created_at: datetime, stop_at: Optional[datetime]):
+    def __init__(self,
+                 temperature: float, created_at: datetime,
+                 stop_at: Optional[datetime], last_set: Optional[datetime] = None,
+                 disabled_at: Optional[datetime] = None):
         self.created_at = created_at
-        self.last_set = created_at
+        self.last_set = last_set or created_at
         self.temperature = temperature
         self.stop_at = stop_at
-        self.disabled_at: Optional[datetime] = None
+        self.disabled_at = disabled_at
 
     def serialize(self) -> Dict[str, Any]:
+        # convert datetime to seconds from epoch and return as dict
         return {
             "temperature": self.temperature,
-            "created_at": self.created_at,
-            "stop_at": self.stop_at,
+            "created_at": self.created_at.timestamp(),
+            "stop_at": self.stop_at.timestamp() if self.stop_at else None,
+            "disabled_at": self.disabled_at.timestamp() if self.disabled_at else None,
+            "last_set": self.last_set.timestamp(),
         }
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, Any]) -> "TemperatureOverride":
+        # check if created_at is string (meaning a legacy format is used)
+        # and convert all times to datetime
+        if isinstance(data["created_at"], str):
+            return cls(
+                temperature=data["temperature"],
+                created_at=datetime.fromisoformat(data["created_at"]),
+                stop_at=datetime.fromisoformat(data["stop_at"]) if data["stop_at"] else None,
+                disabled_at=datetime.fromisoformat(data["disabled_at"]) if data["disabled_at"] else None,
+                last_set=datetime.fromisoformat(data["last_set"]),
+            )
+
+        # convert timestamp seconds to datetime and return new instance
+        return cls(
+            temperature=data["temperature"],
+            created_at=datetime.fromtimestamp(data["created_at"]),
+            stop_at=datetime.fromtimestamp(data["stop_at"]) if data["stop_at"] else None,
+            disabled_at=datetime.fromtimestamp(data["disabled_at"]) if data["disabled_at"] else None,
+            last_set=datetime.fromtimestamp(data["last_set"]),
+        )
 
     def __repr__(self):
         return str(self.__dict__)
@@ -66,7 +94,7 @@ class Bmr:
         self.overrides: Dict[int, TemperatureOverride] = {}
         if overrides is not None:
             for key, value in overrides.items():
-                self.overrides[int(key)] = TemperatureOverride(**value)
+                self.overrides[int(key)] = TemperatureOverride.deserialize(value)
         self.overrides_store = overrides_store
         self.session = session
         self.base_url = base_url
@@ -139,12 +167,16 @@ class Bmr:
             # Example: F01 Byt      F02 Pokoj    F03 Loznice  F04 Koupelna F05 Det pokojF06 Chodba   F07 Kuchyne  F08 Obyvak   R01 Byt      R02 Pokoj    R03 Loznice  R04 Koupelna R05 Det pokojR06 Chodba   R07 Kuchyne  R08 Obyvak  # noqa
 
     async def setManualTemp(self, circuit_id: int, new_target: float, current_target: Optional[float] = None) -> bool:
-        """Set manual temperature for a circuit."""
+        """Set manual temperature for a circuit. Behind the scenes, only a request for an offset is being sent.
+
+        If you ommit current_target, it is retrieved from the unit. If you want to quickly set a certain offset,
+        you can provide the current_target yourself. (e.g. if new_target == current_target, an offset of "0" from
+        the scheduled temprature will be set)."""
         if current_target is None:  # if current_target temperature is not provided, try to get it
             current_settings = await self.getCircuit(circuit_id, skip_override_check=True)
             # the caveat is that the target already contains the user offset, so we need to subtract it...
-            if current_settings["target_temperature"] is not None and current_settings["user_offset"] is not None:
-                current_target = current_settings["target_temperature"] - current_settings["user_offset"]
+            if current_settings["scheduled_temperature"] is not None and current_settings["user_offset"] is not None:
+                current_target = current_settings["scheduled_temperature"] + current_settings["user_offset"]
             else:
                 current_target = new_target  # this will create a zero offset
         offset = new_target - current_target
@@ -153,8 +185,10 @@ class Bmr:
         headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"manualTemp": param}
         await self.authenticate()
-        _LOGGER.debug(f"Setting manual temperature for circuit {circuit_id} to {new_target} from {current_target} using offset {offset}")
-        async with self.session.post(f"{self.base_url}/saveManualTemp", headers=headers, data=FormData(data)) as response:
+        _LOGGER.debug(f"Setting manual temperature for circuit {circuit_id} to {new_target}"
+                      f"from {current_target} using offset {offset}")
+        async with self.session.post(f"{self.base_url}/saveManualTemp",
+                                     headers=headers, data=FormData(data)) as response:
             if response.status != 200:
                 raise Exception(
                     f"Server returned status code {response.status}"
@@ -236,8 +270,8 @@ class Bmr:
                 (?P<enabled>.{1})                  # Whether the circuit is enabled
                 (?P<name>.{13})                    # Name of the circuit
                 (?P<temperature>.{5})              # Current temperature
-                (?P<target_temperature_str>.{3})   # Target temperature (string)
-                (?P<target_temperature>.{5})       # Target temperature (float)
+                (?P<scheduled_temperature>.{3})    # Scheduled temperature
+                (?P<target_temperature>.{5})       # Target temperature (incl. user offset)
                 (?P<user_offset>.{5})              # Current temperature offset set by user
                 (?P<max_offset>.{4})               # Max temperature offset
                 (?P<heating>.{1})                  # Whether the circuit is currently heating
@@ -267,6 +301,7 @@ class Bmr:
             "name": room_status["name"].rstrip(),
             "temperature": None,
             "target_temperature": None,
+            "scheduled_temperature": None,
             "user_offset": None,
             "max_offset": None,
             "heating": False,
@@ -279,6 +314,7 @@ class Bmr:
         }
 
         for key in (
+            "scheduled_temperature",
             "target_temperature",
             "temperature",
             "user_offset",
@@ -307,22 +343,32 @@ class Bmr:
                 result[key] = int(room_status[key])
             except ValueError:
                 pass
+        # track the original target for debugging
+        result["target_temperature_raw"] = result["target_temperature"]
 
-        result["target_temperature_raw"] = result["target_temperature"]  # if overrides are active, this will be the temperature as the unit presents it
-        if not skip_override_check and circuit_id in self.overrides and result["target_temperature"] is not None:
+        # the target temperature computation on BMR is slow, so we use scheduled temperature + offset
+        result["target_temperature"] = target = result["scheduled_temperature"] + result["user_offset"]
+        # if overrides are active, we will change what's shown again and even try to enforce the override
+        if not skip_override_check and circuit_id in self.overrides:
+            _LOGGER.debug(f"Circuit {circuit_id} has an override")
             try:
                 override = self.overrides[circuit_id]
                 result["target_temperature"] = override.temperature
+                _LOGGER.debug(f"Reported temperature changed from {result['target_temperature_raw']}/{target}"
+                              f"to {override.temperature}.")
                 if override.stop_at is None or override.stop_at > datetime.now():
                     # target_temperature should be set to the override's temperature
                     # but the unit is very slow and sometimes changes offset before the target temperature which
                     # messes things up. So we take our time...
-                    if result["target_temperature_raw"] != override.temperature and \
+
+                    if target != override.temperature and \
                        override.last_set < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
                         override.last_set = datetime.now()  # no need to storeOverrides() with this minor change
-                        _LOGGER.debug(f"Override check shows that the target temperature for circuit {circuit_id} should be {override.temperature} instead of {result['target_temperature_raw']}")
+                        _LOGGER.debug(f"Override check shows that the target temperature for circuit {circuit_id} "
+                                      f"should be {override.temperature} instead of "
+                                      f"{result['target_temperature_raw']}/{target}")
                         # we have everything we need to set the manual offset of the temperature
-                        await self.setManualTemp(circuit_id, override.temperature, result['target_temperature_raw'] - result['user_offset'])
+                        await self.setManualTemp(circuit_id, override.temperature, target)
                 elif override.stop_at <= datetime.now():  # the override has expired
                     # the controller can take some time updating the offset,
                     # but we will already force it to report a zero offset (meaning we are back on scheduled temp)
@@ -330,20 +376,22 @@ class Bmr:
                     # but we can't do anything about it. The BMR web itself gets confused while updating the offset.
                     # It would be nice to have an "unknown" state for this, but I don't think we can do that.
                     result["user_offset"] = 0
-                    result["target_temperature"] = result["target_temperature_raw"]
+                    result["target_temperature"] = result["scheduled_temperature"]
                     if override.disabled_at is None:  # we have not disabled the override yet, so let's do it
                         # go back to the original temperature by setting zero offset
                         _LOGGER.debug(f"Override is over for circuit {circuit_id}, setting zero offset.")
                         await self.setManualTemp(circuit_id, 0, 0)
                         # mark the override as disabled
                         self.overrides[circuit_id].disabled_at = datetime.now()
+                        await self.storeOverrides()
                     elif override.disabled_at < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
                         # the override will stay in the disabled state for some time to enforce the 0 offset
                         # once the override expires completely, we have to remove the override from the list
+                        _LOGGER.debug(f"Override for {circuit_id} expired and will be deleted.")
                         del self.overrides[circuit_id]
                         await self.storeOverrides()
             except Exception:
-                pass
+                _LOGGER.exception(f"Error while processing override for circuit {circuit_id}")
         return result
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
@@ -466,7 +514,7 @@ class Bmr:
                 _LOGGER.warning("Summer mode is not a boolean.")
                 return False
 
-    async def setSummerMode(self, value:bool):
+    async def setSummerMode(self, value: bool):
         """Enable or disable summer mode."""
         await self.authenticate()
         headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
@@ -500,7 +548,7 @@ class Bmr:
                     )
                 )
 
-    async def setSummerModeAssignments(self, circuits: List[int], value:bool) -> Optional[List[bool]]:
+    async def setSummerModeAssignments(self, circuits: List[int], value: bool) -> Optional[List[bool]]:
         """Assign or remove specified circuits to/from summer mode. Leave
         other circuits as they are.
         """
@@ -948,6 +996,7 @@ class BmrCircuitData(TypedDict):
     name: str       # name of the circuit
     temperature: Optional[float]  # current temperature
     target_temperature: Optional[float]  # target temperature, including user_offset if applied
+    scheduled_temperature: Optional[float]  # scheduled temperature
     user_offset: Optional[float]  # manual offset applied by the user to the scheduled temperature
     max_offset: Optional[float]   # maximum user offset allowed by the system
     heating: bool   # True if the circuit is currently heating
