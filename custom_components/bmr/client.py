@@ -31,19 +31,47 @@ TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how much time to wait before 
 
 
 class TemperatureOverride:
-    def __init__(self, temperature: float, created_at: datetime, stop_at: Optional[datetime]):
+    def __init__(self,
+                 temperature: float, created_at: datetime,
+                 stop_at: Optional[datetime], last_set: Optional[datetime] = None,
+                 disabled_at: Optional[datetime] = None):
         self.created_at = created_at
-        self.last_set = created_at
+        self.last_set = last_set or created_at
         self.temperature = temperature
         self.stop_at = stop_at
-        self.disabled_at: Optional[datetime] = None
+        self.disabled_at = disabled_at
 
     def serialize(self) -> Dict[str, Any]:
+        # convert datetime to seconds from epoch and return as dict
         return {
             "temperature": self.temperature,
-            "created_at": self.created_at,
-            "stop_at": self.stop_at,
+            "created_at": self.created_at.timestamp(),
+            "stop_at": self.stop_at.timestamp() if self.stop_at else None,
+            "disabled_at": self.disabled_at.timestamp() if self.disabled_at else None,
+            "last_set": self.last_set.timestamp(),
         }
+
+    @classmethod
+    def deserialize(cls, data: Dict[str, Any]) -> "TemperatureOverride":
+        # check if created_at is string (meaning a legacy format is used)
+        # and convert all times to datetime
+        if isinstance(data["created_at"], str):
+            return cls(
+                temperature=data["temperature"],
+                created_at=datetime.fromisoformat(data["created_at"]),
+                stop_at=datetime.fromisoformat(data["stop_at"]) if data["stop_at"] else None,
+                disabled_at=datetime.fromisoformat(data["disabled_at"]) if data["disabled_at"] else None,
+                last_set=datetime.fromisoformat(data["last_set"]),
+            )
+
+        # convert timestamp seconds to datetime and return new instance
+        return cls(
+            temperature=data["temperature"],
+            created_at=datetime.fromtimestamp(data["created_at"]),
+            stop_at=datetime.fromtimestamp(data["stop_at"]) if data["stop_at"] else None,
+            disabled_at=datetime.fromtimestamp(data["disabled_at"]) if data["disabled_at"] else None,
+            last_set=datetime.fromtimestamp(data["last_set"]),
+        )
 
     def __repr__(self):
         return str(self.__dict__)
@@ -66,7 +94,7 @@ class Bmr:
         self.overrides: Dict[int, TemperatureOverride] = {}
         if overrides is not None:
             for key, value in overrides.items():
-                self.overrides[int(key)] = TemperatureOverride(**value)
+                self.overrides[int(key)] = TemperatureOverride.deserialize(value)
         self.overrides_store = overrides_store
         self.session = session
         self.base_url = base_url
@@ -337,13 +365,15 @@ class Bmr:
                         await self.setManualTemp(circuit_id, 0, 0)
                         # mark the override as disabled
                         self.overrides[circuit_id].disabled_at = datetime.now()
+                        await self.storeOverrides()
                     elif override.disabled_at < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
                         # the override will stay in the disabled state for some time to enforce the 0 offset
                         # once the override expires completely, we have to remove the override from the list
+                        _LOGGER.debug(f"Override for {circuit_id} expired and will be deleted.")
                         del self.overrides[circuit_id]
                         await self.storeOverrides()
             except Exception:
-                pass
+                _LOGGER.exception(f"Error while processing override for circuit {circuit_id}")
         return result
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
