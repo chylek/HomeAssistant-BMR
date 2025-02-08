@@ -30,6 +30,14 @@
       "ventilation_speed": {
         "name": "Ventilace"
       }
+    },
+    "switch": {
+      "away_mode": {
+        "name": "BMR mód útlum"
+      },
+      "summer_mode": {
+        "name": "BMR mód léto"
+      }
     }
   }
 }
