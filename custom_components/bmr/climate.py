@@ -289,6 +289,7 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         """ Set preset mode.
         """
         if preset_mode == PRESET_AWAY:
+            await self.coordinator.client.removeTemperatureOverride(self._idx)
             await self.coordinator.client.setLowModeAssignments([self._idx], True)
             await self.coordinator.client.setLowMode(True)
         else:

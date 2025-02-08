@@ -181,8 +181,8 @@ class Bmr:
         if current_target is None:  # if current_target temperature is not provided, try to get it
             current_settings = await self.getCircuit(circuit_id, skip_override_check=True)
             # the caveat is that the target already contains the user offset, so we need to subtract it...
-            if current_settings["scheduled_temperature"] is not None and current_settings["user_offset"] is not None:
-                current_target = current_settings["scheduled_temperature"] + current_settings["user_offset"]
+            if current_settings["scheduled_temperature"] is not None:
+                current_target = current_settings["scheduled_temperature"]
             else:
                 current_target = new_target  # this will create a zero offset
         offset = new_target - current_target
@@ -374,7 +374,7 @@ class Bmr:
                                       f"should be {override.temperature} instead of "
                                       f"{result['target_temperature_raw']}/{target}")
                         # we have everything we need to set the manual offset of the temperature
-                        await self.setManualTemp(circuit_id, override.temperature, target)
+                        await self.setManualTemp(circuit_id, override.temperature, result["scheduled_temperature"])
                 elif override.stop_at <= datetime.now():  # the override has expired
                     # the controller can take some time updating the offset,
                     # but we will already force it to report a zero offset (meaning we are back on scheduled temp)
