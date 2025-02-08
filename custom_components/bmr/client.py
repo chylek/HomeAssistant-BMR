@@ -59,18 +59,20 @@ class TemperatureOverride:
             return cls(
                 temperature=data["temperature"],
                 created_at=datetime.fromisoformat(data["created_at"]),
-                stop_at=datetime.fromisoformat(data["stop_at"]) if data["stop_at"] else None,
-                disabled_at=datetime.fromisoformat(data["disabled_at"]) if data["disabled_at"] else None,
-                last_set=datetime.fromisoformat(data["last_set"]),
+                stop_at=datetime.fromisoformat(data["stop_at"]) if data.get("stop_at") else None,
+                disabled_at=datetime.fromisoformat(data["disabled_at"]) if data.get("disabled_at") else None,
+                # if last_set is not available, use created_at
+                last_set=datetime.fromisoformat(data["last_set"] if data.get("last_set") else data["created_at"]),
             )
 
         # convert timestamp seconds to datetime and return new instance
         return cls(
             temperature=data["temperature"],
             created_at=datetime.fromtimestamp(data["created_at"]),
-            stop_at=datetime.fromtimestamp(data["stop_at"]) if data["stop_at"] else None,
-            disabled_at=datetime.fromtimestamp(data["disabled_at"]) if data["disabled_at"] else None,
-            last_set=datetime.fromtimestamp(data["last_set"]),
+            stop_at=datetime.fromtimestamp(data["stop_at"]) if data.get("stop_at") else None,
+            disabled_at=datetime.fromtimestamp(data["disabled_at"]) if data.get("disabled_at") else None,
+            # if last_set is not available, use created_at
+            last_set=datetime.fromtimestamp(data["last_set"] if data.get("last_set") else data["created_at"]),
         )
 
     def __repr__(self):
@@ -94,7 +96,11 @@ class Bmr:
         self.overrides: Dict[int, TemperatureOverride] = {}
         if overrides is not None:
             for key, value in overrides.items():
-                self.overrides[int(key)] = TemperatureOverride.deserialize(value)
+                try:
+                    self.overrides[int(key)] = TemperatureOverride.deserialize(value)
+                except Exception:
+                    # skip the override if it's malformed
+                    _LOGGER.exception(f"Error while loading override for circuit {key}")
         self.overrides_store = overrides_store
         self.session = session
         self.base_url = base_url
