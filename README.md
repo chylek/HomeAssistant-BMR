@@ -57,6 +57,10 @@ The integration is configurable through the Home Assistant UI.
   - **Off**: Adds the circuit to the "Summer" mode and enables the Summer mode globally if it wasn't active yet – basically turns off the circuits.
   - **Away**: Adds the circuit to the "Low" mode and enables the Low mode globally if it wasn't active yet. The integration doesn't support changing the Low mode's temperature.
 
+### Switches
+- **Away Mode**: A switch to enable or disable Away/Low mode globally for the system. This keeps all the circuit assignments intact.
+- **Summer Mode**: A switch to enable or disable Summer mode globally for the system. This keeps all the circuit assignments intact.
+
 ## License
 This project is licensed under the **Apache 2.0** license.
 

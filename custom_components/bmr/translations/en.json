@@ -1,35 +1,43 @@
 {
-    "title": "BMR HC64",
-    "config": {
-      "step": {
-        "user": {
-          "data": {
-            "url": "URL",
-            "username": "Username",
-            "password": "Password",
-            "can_cool": "Supports cooling"
-          }
+  "title": "BMR HC64",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "url": "URL",
+          "username": "Username",
+          "password": "Password",
+          "can_cool": "Supports cooling"
         }
-      },
-      "error": {
-        "cannot_connect": "Cannot connect.",
-        "invalid_auth": "Invalid authentication.",
-        "unknown": "Unknown error."
-      },
-      "abort": {
-        "already_configured": "The device is already configured."
       }
     },
-    "entity": {
-      "binary_sensor": {
-        "hdo": {
-          "name": "Off-peak tariff"
-        }
+    "error": {
+      "cannot_connect": "Cannot connect.",
+      "invalid_auth": "Invalid authentication.",
+      "unknown": "Unknown error."
+    },
+    "abort": {
+      "already_configured": "The device is already configured."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "hdo": {
+        "name": "Off-peak tariff"
+      }
+    },
+    "sensor": {
+      "ventilation_speed": {
+        "name": "Ventilation"
+      }
+    },
+    "switch": {
+      "away_mode": {
+        "name": "BMR Away Mode"
       },
-      "sensor": {
-        "ventilation_speed": {
-          "name": "Ventilation"
-        }
+      "summer_mode": {
+        "name": "BMR Summer Mode"
       }
     }
   }
+}
