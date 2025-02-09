@@ -14,13 +14,16 @@ from asyncache import cached
 from cachetools import LRUCache, TTLCache
 from homeassistant.helpers.storage import Store
 
+from .const import TIMEOUT
+
 _LOGGER = logging.getLogger(__name__)
 
 
-HTTP_DEFAULT_TIMEOUT = 10  # seconds
-HTTP_DEFAULT_MAX_RETRIES = 10
 CACHE_DEFAULT_MAXSIZE = 128
 CACHE_DEFAULT_TTL = 10
+BACKOFF_TRIES = 5
+DEFAULT_HEADERS = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
+DEFAULT_REQ_DATA = {"param": "+"}
 
 
 class AuthException(Exception):
@@ -105,7 +108,41 @@ class Bmr:
         self.session = session
         self.base_url = base_url
 
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
+    async def _post(self,
+                    url: str,
+                    data: Dict[str, Any] = DEFAULT_REQ_DATA,
+                    headers: Optional[Dict[str, str]] = DEFAULT_HEADERS
+                    ) -> str:
+        """Send a POST request to the BMR controller.
+
+        Tries to send a POST request to the BMR controller. If the request
+        fails, it will try to re-authenticate and then re-send the request.
+
+        Args:
+            url: URL to send the request to.
+            data: Data to send in the request.
+            headers: Headers to send in the request.
+
+        Returns:
+            Response text from the server.
+        """
+        try:
+            async with self.session.post(f"{self.base_url}/{url}",
+                                         data=FormData(data),
+                                         headers=headers,
+                                         timeout=TIMEOUT) as response:
+                resp = await response.text()
+                if resp.strip() == "" or resp.strip() == "\0":
+                    raise Exception("Empty response - need to re-authenticate")
+                return resp
+        except Exception:
+            _LOGGER.debug(f"Error while posting to {url}", exc_info=True)
+            # authentication may solve the issue, backoff will resend the request
+            await self.authenticate()
+            raise  # re-raise the exception
+
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def authenticate(self):
         """Login to BMR controller. Note that BMR controller is using a kinda
         weird and insecure authentication mechanism - it looks like it's
@@ -119,7 +156,7 @@ class Bmr:
                 tmp = ord(c) ^ (day << 2)
                 output = output + hex(tmp)[2:].zfill(2)
             return output.upper()
-
+        _LOGGER.debug("Authenticating to BMR controller")
         data = {"loginName": bmr_hash(self._user), "passwd": bmr_hash(self._password)}
         async with self.session.post(f"{self.base_url}/menu.html", data=FormData(data)) as response:
             if "res_error_title" in await response.text():
@@ -142,42 +179,35 @@ class Bmr:
         ).hexdigest()[:8]
 
     @cached(LRUCache(maxsize=1))
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getNumCircuits(self):
         """Get the number of heating circuits."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        async with self.session.post(f"{self.base_url}/numOfRooms", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return int(await response.text())
+        return int(await self._post("numOfRooms"))
 
     @cached(LRUCache(maxsize=1))
-    async def getCircuitNames(self):
+    async def getCircuitNames(self) -> List[str]:
         """Get the names of all heating circuits."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        async with self.session.post(f"{self.base_url}/listOfRooms", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            text = await response.text()
-            return [
-                text[i: i + 13].strip() for i in range(0, len(text), 13)
-            ]
-            # Example: F01 Byt      F02 Pokoj    F03 Loznice  F04 Koupelna F05 Det pokojF06 Chodba   F07 Kuchyne  F08 Obyvak   R01 Byt      R02 Pokoj    R03 Loznice  R04 Koupelna R05 Det pokojR06 Chodba   R07 Kuchyne  R08 Obyvak  # noqa
+        text = await self._post("listOfRooms")
+        return [
+            text[i: i + 13].strip() for i in range(0, len(text), 13)
+        ]
+        # Example: F01 Byt      F02 Pokoj    F03 Loznice  F04 Koupelna F05 Det pokojF06 Chodba   F07 Kuchyne  F08 Obyvak   R01 Byt      R02 Pokoj    R03 Loznice  R04 Koupelna R05 Det pokojR06 Chodba   R07 Kuchyne  R08 Obyvak  # noqa
 
     async def setManualTemp(self, circuit_id: int, new_target: float, current_target: Optional[float] = None) -> bool:
         """Set manual temperature for a circuit. Behind the scenes, only a request for an offset is being sent.
 
         If you ommit current_target, it is retrieved from the unit. If you want to quickly set a certain offset,
         you can provide the current_target yourself. (e.g. if new_target == current_target, an offset of "0" from
-        the scheduled temprature will be set)."""
+        the scheduled temprature will be set).
+        
+        Args:
+            circuit_id: ID of the circuit.
+            new_target: New target temperature.
+            current_target: Current target temperature (optional).
+
+        Returns:
+            True if the request was successful, False otherwise
+        """
         if current_target is None:  # if current_target temperature is not provided, try to get it
             current_settings = await self.getCircuit(circuit_id, skip_override_check=True)
             # the caveat is that the target already contains the user offset, so we need to subtract it...
@@ -188,21 +218,18 @@ class Bmr:
         offset = new_target - current_target
         param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", int(abs(offset)*10))
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"manualTemp": param}
-        await self.authenticate()
         _LOGGER.debug(f"Setting manual temperature for circuit {circuit_id} to {new_target}"
                       f"from {current_target} using offset {offset}")
-        async with self.session.post(f"{self.base_url}/saveManualTemp",
-                                     headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("saveManualTemp", data)
 
     async def setTemperatureOverride(self, circuit_id: int, temperature: float, duration: Optional[float] = None):
-        """Set temperature override for a circuit."""
+        """Set temperature override for a circuit.
+
+        Args:
+            circuit_id: ID of the circuit.
+            temperature: New target temperature.
+            duration: Duration of the override in seconds. If not provided, the override will be active indefinitely."""
         _LOGGER.debug(f"Setting temperature override for circuit {circuit_id} to {temperature}°C")
         now = datetime.now()
         if duration is not None:
@@ -237,7 +264,7 @@ class Bmr:
             # let's remove the user offset then
             await self.setManualTemp(circuit_id, 0, 0)
 
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getCircuit(self, circuit_id: int, skip_override_check: bool = False) -> "BmrCircuitData":
         """Get circuit status.
 
@@ -260,16 +287,17 @@ class Bmr:
           POS_LOW = 42
           POS_LETO = 43
           POS_S_CHLADI = 44
+
+        Args:
+            circuit_id: ID of the circuit.
+            skip_override_check: Skip checking for temperature overrides - useful if you want to just
+                get the circuit info, but don't want the control loop to kick in, since it is done elsewhere.
+
+        Returns:
+            Circuit status.
         """
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"param": circuit_id}
-        async with self.session.post(f"{self.base_url}/wholeRoom", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            room_status_text = await response.text()
+        room_status_text = await self._post("wholeRoom", data)
 
         match = re.match(
             r"""
@@ -317,6 +345,8 @@ class Bmr:
             "summer_mode": False,
             "target_temperature_raw": None,
             "override_updating": False,
+            "low_mode_assigned": None,
+            "summer_mode_assigned": None,
         }
 
         for key in (
@@ -403,29 +433,14 @@ class Bmr:
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getSchedules(self):
         """Load schedules."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        async with self.session.post(f"{self.base_url}/listOfModes", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("listOfModes")
         return [x.rstrip() for x in re.findall(r".{13}", response_text)]
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getSchedule(self, schedule_id: int):
         """Load schedule settings."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"modeID": "{:02d}".format(schedule_id)}
-        async with self.session.post(f"{self.base_url}/loadMode", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("loadMode", data)
 
         # Example: 1 Byt        00:0002106:0002112:0002121:00021
         match = re.match(
@@ -464,11 +479,8 @@ class Bmr:
         time. Note that the first entry in the timetable must be always for
         time "00:00".
         """
-        await self.authenticate()
         if timetable[0]["time"] != "00:00":
             raise Exception("First timetable entry must be for time 00:00")
-
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
 
         data = {
             "modeSettings": "{:02d}{:13.13}{}".format(
@@ -482,113 +494,65 @@ class Bmr:
                 ),
             )
         }
-        async with self.session.post(f"{self.base_url}/saveMode", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("saveMode", data)
 
     async def deleteSchedule(self, schedule_id: int):
         """Delete schedule."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-
         data = {"modeID": "{:02d}".format(schedule_id)}
-        async with self.session.post(f"{self.base_url}/deleteMode", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("deleteMode", data)
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getSummerMode(self):
         """Return True if summer mode is currently activated."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        async with self.session.post(f"{self.base_url}/loadSummerMode", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            val = await response.text()
-            try:
-                return not bool(int(val))  # for some reason 0 == summer mode on, 1 == summer mode off
-            except ValueError:
-                _LOGGER.warning("Summer mode is not a boolean.")
-                return False
+        val = await self._post("loadSummerMode")
+        try:
+            return not bool(int(val))  # for some reason 0 == summer mode on, 1 == summer mode off
+        except ValueError:
+            _LOGGER.warning("Summer mode is not a boolean.")
+            return False
 
     async def setSummerMode(self, value: bool):
         """Enable or disable summer mode."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"summerMode": "0" if value else "1"}
-        async with self.session.post(f"{self.base_url}/saveSummerMode", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("saveSummerMode", data)
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getSummerModeAssignments(self):
         """Load circuit summer mode assignments, i.e. which circuits will be
         affected by summer mode when it is turned on.
         """
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        async with self.session.post(f"{self.base_url}/letoLoadRooms", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
+        response_text = await self._post("letoLoadRooms")
+        try:
+            return [bool(int(x)) for x in list(response_text)]
+        except ValueError:
+            raise Exception(
+                "Server returned malformed data: {}. Try again later".format(
+                    response_text
                 )
-            response_text = await response.text()
-            try:
-                return [bool(int(x)) for x in list(response_text)]
-            except ValueError:
-                raise Exception(
-                    "Server returned malformed data: {}. Try again later".format(
-                        response_text
-                    )
-                )
+            )
 
     async def setSummerModeAssignments(self, circuits: List[int], value: bool) -> Optional[List[bool]]:
         """Assign or remove specified circuits to/from summer mode. Leave
         other circuits as they are.
         """
         _LOGGER.debug(f"Setting summer mode for circuits {circuits} to {value}")
-        await self.authenticate()
         assignments = await self.getSummerModeAssignments()
 
         for circuit_id in circuits:
             assignments[circuit_id] = value
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"value": "".join([str(int(x)) for x in assignments])}
-        async with self.session.post(f"{self.base_url}/letoSaveRooms", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            if "true" in await response.text():
-                return assignments
-            else:
-                return None
+        if "true" in await self._post("letoSaveRooms", data):
+            return assignments
+        else:
+            return None
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getLowMode(self) -> "BmrLowModeData":
         """Get status of the LOW mode."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        async with self.session.post(f"{self.base_url}/loadLows", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("loadLows")
         # The response is formatted as "<temperature><start_datetime><end_datetime>", let's parse it
         match = re.match(
             r"""
@@ -641,7 +605,6 @@ class Bmr:
         if temperature is None:
             temperature = (await self.getLowMode())["temperature"]
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {
             "lowData": "{:03d}{}{}".format(
                 int(temperature),
@@ -657,27 +620,14 @@ class Bmr:
                 ),
             )
         }
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/lowSave", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("lowSave", data)
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getLowModeAssignments(self):
         """Load circuit LOW mode assignments, i.e. which circuits will be
         affected by LOW mode when it is turned on.
         """
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        async with self.session.post(f"{self.base_url}/lowLoadRooms", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("lowLoadRooms")
         return [bool(int(x)) for x in list(response_text)]
 
     async def setLowModeAssignments(self, circuits, value) -> Optional[List[bool]]:
@@ -689,18 +639,11 @@ class Bmr:
         for circuit_id in circuits:
             assignments[circuit_id] = value
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"value": "".join([str(int(x)) for x in assignments])}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/lowSaveRooms", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            if "true" in await response.text():
-                return assignments
-            else:
-                return None
+        if "true" in await self._post("lowSaveRooms", data):
+            return assignments
+        else:
+            return None
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getCircuitSchedules(self, circuit_id):
@@ -708,16 +651,8 @@ class Bmr:
         to what day. It is possible to set different schedule for up 21
         days.
         """
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-
         data = {"roomID": "{:02d}".format(circuit_id)}
-        async with self.session.post(f"{self.base_url}/roomSettings", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("roomSettings", data)
 
         # Example: 0140-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1
         match = re.match(
@@ -770,8 +705,6 @@ class Bmr:
         """Assign circuits schedules. It is possible to have a different
         schedule for up to 21 days.
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-
         # Make sure that day_schedules is list with length 21, if not append None's at the end
         day_schedules += [None for _ in range(21 - len(day_schedules))]
 
@@ -790,27 +723,13 @@ class Bmr:
                 ),
             )
         }
-
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/saveAssignmentModes", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return "true" in await response.text()
+        return "true" in await self._post("saveAssignmentModes", data)
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getHDO(self):
         """Get status of the HDO (remote grid control) mode."""
-        await self.authenticate()
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        async with self.session.post(f"{self.base_url}/loadHDO", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return await response.text() == "1"
+        return await self._post("loadHDO") == "1"
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
     async def getNumOfRollerShutters(self) -> int:
@@ -820,15 +739,7 @@ class Bmr:
         curl 'http://bmr-hc64.local/numOfRollerShutters' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
         --data-raw 'param=+'
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/numOfRollerShutters", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return int(await response.text())
+        return int(await self._post("numOfRollerShutters"))
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
     async def getListOfRollerShutters(self) -> list[str]:
@@ -838,15 +749,7 @@ class Bmr:
         Example call:
         curl 'http://bmr-hc64.local/listOfRollerShutters' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' --data-raw 'param=+'
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/listOfRollerShutters", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("listOfRollerShutters")
         return [
             response_text[i: i + 13].strip() for i in range(0, len(response_text), 13)
         ]
@@ -859,15 +762,7 @@ class Bmr:
         Example response:
         0000000001111111111111111111111111111111100000000000
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        data = {"param": "+"}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/windSensorStatus", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            return await response.text()
+        return await self._post("windSensorStatus")
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
     async def getWholeRollerShutter(self, shutter_id: int) -> dict:
@@ -879,15 +774,8 @@ class Bmr:
         '1Kuchyna      0000010000000000000'
         """
         assert 0 <= shutter_id <= 32
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
         data = {"rollerShutter": str(shutter_id)}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/wholeRollerShutter", headers=headers, data=FormData(data)) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("wholeRollerShutter", data)
 
         # TODO how is the response formatted?
         ret = {
@@ -933,19 +821,9 @@ class Bmr:
                 bmr_pos = 2
 
             bmr_tilt: int = int((100 - tilt) / 10)
-            headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
             data = {"manualChange": f"{shutter_id:02d}{bmr_pos:01d}{bmr_tilt:02d}"}
-            print(data)
-            await self.authenticate()
-            async with self.session.post(f"{self.base_url}/saveManualChange", headers=headers, data=FormData(data)) as response:
-                if response.status != 200:
-                    raise Exception(
-                        f"Server returned status code {response.status}"
-                    )
-                response_text = await response.text()
-            print("DATA")
-            print(data)
-            print(response_text)
+            response_text = await self._post("saveManualChange", data)
+            _LOGGER.debug(f"data {data} response text {response_text}")
             ret = "true" in response_text
             return ret
         except Exception as e:
@@ -953,19 +831,12 @@ class Bmr:
             return False
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
-    @backoff.on_exception(backoff.expo, Exception, max_tries=3)
+    @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getVentilation(self) -> Dict[str, int]:
         """
         Get the status of the ventilation system.
         """
-        headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}
-        await self.authenticate()
-        async with self.session.post(f"{self.base_url}/rekuperaceStatus", headers=headers, data=FormData({"param": "+"})) as response:
-            if response.status != 200:
-                raise Exception(
-                    f"Server returned status code {response.status}"
-                )
-            response_text = await response.text()
+        response_text = await self._post("rekuperaceStatus")
         ppm = int(response_text[5:9])
         power = int(response_text[:3])
 
@@ -978,17 +849,40 @@ class Bmr:
         """Get all data from the BMR controller."""
         # iterate over all circuits and get their data
         circuits: List[BmrCircuitData] = []
+        _LOGGER.debug("Getting all data from the BMR controller")
         num_circuits = await self.getNumCircuits()
+        _LOGGER.debug(f"Found {num_circuits} circuits")
         for circuit_id in range(num_circuits):
+            _LOGGER.debug(f"Getting data for circuit {circuit_id}")
             circuits.append(await self.getCircuit(circuit_id))
-        hdo = await self.getHDO()
-        ventilation = await self.getVentilation()
-        summer_mode = await self.getSummerMode()
-        low_mode = await self.getLowMode()
-        for idx, assigned in enumerate(await self.getSummerModeAssignments()):
-            circuits[idx]["summer_mode_assigned"] = assigned
-        for idx, assigned in enumerate(await self.getLowModeAssignments()):
-            circuits[idx]["low_mode_assigned"] = assigned
+        try:
+            hdo = await self.getHDO()
+        except Exception:
+            hdo = None
+        try:
+            ventilation = await self.getVentilation()
+        except Exception:
+            ventilation = None
+        try:
+            summer_mode = await self.getSummerMode()
+        except Exception:
+            summer_mode = None
+        try:
+            low_mode = await self.getLowMode()
+        except Exception:
+            low_mode = None
+
+        try:
+            for idx, assigned in enumerate(await self.getSummerModeAssignments()):
+                circuits[idx]["summer_mode_assigned"] = assigned
+        except Exception:
+            pass
+        try:
+            for idx, assigned in enumerate(await self.getLowModeAssignments()):
+                circuits[idx]["low_mode_assigned"] = assigned
+        except Exception:
+            pass
+
         _LOGGER.debug(f"Got all data: {circuits}, {hdo}, {ventilation}, {summer_mode}, {low_mode}")
         _LOGGER.debug(f"Current overrides: {self.overrides}")
         return {
@@ -1029,7 +923,7 @@ class BmrLowModeData(TypedDict):
 
 class BmrAllData(TypedDict):
     circuits: List[BmrCircuitData]
-    hdo: bool
-    ventilation: Dict[str, int]
-    summer_mode: bool
-    low_mode: BmrLowModeData
+    hdo: Optional[bool]
+    ventilation: Optional[Dict[str, int]]
+    summer_mode: Optional[bool]
+    low_mode: Optional[BmrLowModeData]
