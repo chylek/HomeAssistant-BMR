@@ -2,7 +2,6 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 
-import async_timeout
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, CONF_PASSWORD, CONF_USERNAME, CONF_URL
 from homeassistant.core import HomeAssistant
@@ -72,11 +71,8 @@ class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
-        async with async_timeout.timeout(30):
-            data = await self.client.getAllData()
-            return data
+        data = await self.client.getAllData()
+        return data
 
 
 class BmrEntity(CoordinatorEntity[BmrCoordinator]):
