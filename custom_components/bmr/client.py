@@ -977,7 +977,7 @@ class Bmr:
     async def getAllData(self) -> "BmrAllData":
         """Get all data from the BMR controller."""
         # iterate over all circuits and get their data
-        circuits = []
+        circuits: List[BmrCircuitData] = []
         num_circuits = await self.getNumCircuits()
         for circuit_id in range(num_circuits):
             circuits.append(await self.getCircuit(circuit_id))
@@ -985,6 +985,10 @@ class Bmr:
         ventilation = await self.getVentilation()
         summer_mode = await self.getSummerMode()
         low_mode = await self.getLowMode()
+        for idx, assigned in enumerate(await self.getSummerModeAssignments()):
+            circuits[idx]["summer_mode_assigned"] = assigned
+        for idx, assigned in enumerate(await self.getLowModeAssignments()):
+            circuits[idx]["low_mode_assigned"] = assigned
         _LOGGER.debug(f"Got all data: {circuits}, {hdo}, {ventilation}, {summer_mode}, {low_mode}")
         _LOGGER.debug(f"Current overrides: {self.overrides}")
         return {
@@ -1012,6 +1016,8 @@ class BmrCircuitData(TypedDict):
     summer_mode: bool  # True if summer mode is applied to the circuit
     target_temperature_raw: Optional[float]  # the temperature as the unit passes it, no the modifications by overrides
     override_updating: bool  # True if the temperature override is waiting to be set and reporting may be inaccurate
+    low_mode_assigned: Optional[bool]  # True if the circuit is assigned to low mode
+    summer_mode_assigned: Optional[bool]  # True if the circuit is assigned to summer mode
 
 
 class BmrLowModeData(TypedDict):

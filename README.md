@@ -56,6 +56,12 @@ The integration is configurable through the Home Assistant UI.
   - **Heat**: Manual target temperature adjustment using a temperature offset. There is no point in setting this mode directly - set the target temperature instead!
   - **Off**: Adds the circuit to the "Summer" mode and enables the Summer mode globally if it wasn't active yet – basically turns off the circuits.
   - **Away**: Adds the circuit to the "Low" mode and enables the Low mode globally if it wasn't active yet. The integration doesn't support changing the Low mode's temperature.
+- Attributes:
+  - **hvac_mode**: Built-in attribute indicating the current mode.
+  - **current_temperature**: The current temperature of the circuit as reported by BMR.
+  - **target_temperature**: The target temperature of the circuit. This is the temperature that the circuit will try to reach. This may be temporarily different from the temperature reported by BMR if there are any changes being applied.
+  - **assigned_to_away**: True if the circuit is assigned to the Away mode and will switch to the Away mode when the global Away/Low mode is enabled.
+  - **assigned_to_summer**: True if the circuit is assigned to the Summer mode and will switch to the Summer mode when the global Summer mode is enabled.
 
 ### Switches
 - **Away Mode**: A switch to enable or disable Away/Low mode globally for the system. This keeps all the circuit assignments intact.
