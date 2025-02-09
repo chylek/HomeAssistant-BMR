@@ -323,3 +323,11 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
 
     async def async_turn_on(self) -> None:
         await self.async_set_hvac_mode(HVACMode.AUTO)
+
+    @property
+    def extra_state_attributes(self):
+        """Return the extra state attributes."""
+        return {
+            "assigned_to_away": self.circuit.get("low_mode_assigned", False) if self.circuit else False,
+            "assigned_to_summer": self.circuit.get("summer_mode_assigned", False) if self.circuit else False,
+        }
