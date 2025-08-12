@@ -264,9 +264,9 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         if self.circuit.get("summer_mode"):
             return HVACAction.OFF
         elif self.circuit.get("heating"):
+            if self.circuit.get("cooling"):  # both "heating" and "cooling" flags are active when cooling
+                return HVACAction.COOLING
             return HVACAction.HEATING
-        elif self.circuit.get("cooling"):
-            return HVACAction.COOLING
         else:
             return HVACAction.IDLE
 
