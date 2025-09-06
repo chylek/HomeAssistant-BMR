@@ -9,7 +9,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpda
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, CONF_DATA_COORDINATOR, CONF_CAN_COOL
+from .const import DOMAIN, CONF_DATA_COORDINATOR, CONF_CAN_COOL, CONF_TILT_STEPS
 from .client import Bmr, BmrAllData
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.CLIMATE,
     Platform.SWITCH,
+    Platform.COVER,
 ]
 
 
@@ -27,9 +28,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # load overrides from storage:
     store = Store(hass, 1, f"bmr_overrides_{entry.entry_id}")
     overrides = await store.async_load()
-    client = Bmr(entry.data[CONF_URL], entry.data[CONF_USERNAME],
-                 entry.data[CONF_PASSWORD], entry.data.get(CONF_CAN_COOL, False),
-                 async_get_clientsession(hass), overrides, store)
+    client = Bmr(
+        entry.data[CONF_URL],
+        entry.data[CONF_USERNAME],
+        entry.data[CONF_PASSWORD],
+        entry.data.get(CONF_CAN_COOL, False),
+        async_get_clientsession(hass),
+        overrides,
+        store,
+        entry.data.get(CONF_TILT_STEPS, 10),
+    )
 
     coordinator = BmrCoordinator(hass, client)
     coordinator.unique_id = await client.getUniqueId()
@@ -60,7 +68,7 @@ class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
             # Name of the data. For logging purposes.
             name=DOMAIN,
             # Polling interval. Will only be polled if there are subscribers.
-            update_interval=timedelta(minutes=1)
+            update_interval=timedelta(minutes=1),
         )
         self.client = client
         self.unique_id = "unk"

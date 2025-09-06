@@ -34,10 +34,14 @@ TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how much time to wait before 
 
 
 class TemperatureOverride:
-    def __init__(self,
-                 temperature: float, created_at: datetime,
-                 stop_at: Optional[datetime], last_set: Optional[datetime] = None,
-                 disabled_at: Optional[datetime] = None):
+    def __init__(
+        self,
+        temperature: float,
+        created_at: datetime,
+        stop_at: Optional[datetime],
+        last_set: Optional[datetime] = None,
+        disabled_at: Optional[datetime] = None,
+    ):
         self.created_at = created_at
         self.last_set = last_set or created_at
         self.temperature = temperature
@@ -92,6 +96,7 @@ class Bmr:
         session: ClientSession,
         overrides: Optional[Dict[int, Dict[str, Any]]] = None,
         overrides_store: Optional[Store[Any]] = None,
+        shutter_tilt_steps: int = 10,
     ):
         self._user = user
         self._password = password
@@ -107,13 +112,12 @@ class Bmr:
         self.overrides_store = overrides_store
         self.session = session
         self.base_url = base_url
+        self.shutter_tilt_steps = shutter_tilt_steps
 
     @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
-    async def _post(self,
-                    url: str,
-                    data: Dict[str, Any] = DEFAULT_REQ_DATA,
-                    headers: Optional[Dict[str, str]] = DEFAULT_HEADERS
-                    ) -> str:
+    async def _post(
+        self, url: str, data: Dict[str, Any] = DEFAULT_REQ_DATA, headers: Optional[Dict[str, str]] = DEFAULT_HEADERS
+    ) -> str:
         """Send a POST request to the BMR controller.
 
         Tries to send a POST request to the BMR controller. If the request
@@ -128,10 +132,9 @@ class Bmr:
             Response text from the server.
         """
         try:
-            async with self.session.post(f"{self.base_url}/{url}",
-                                         data=FormData(data),
-                                         headers=headers,
-                                         timeout=TIMEOUT) as response:
+            async with self.session.post(
+                f"{self.base_url}/{url}", data=FormData(data), headers=headers, timeout=TIMEOUT
+            ) as response:
                 resp = await response.text()
                 if resp.strip() == "" or resp.strip() == "\0":
                     raise Exception("Empty response - need to re-authenticate")
@@ -156,6 +159,7 @@ class Bmr:
                 tmp = ord(c) ^ (day << 2)
                 output = output + hex(tmp)[2:].zfill(2)
             return output.upper()
+
         _LOGGER.debug("Authenticating to BMR controller")
         data = {"loginName": bmr_hash(self._user), "passwd": bmr_hash(self._password)}
         async with self.session.post(f"{self.base_url}/menu.html", data=FormData(data)) as response:
@@ -174,9 +178,7 @@ class Bmr:
         Note that this is more like a unique ID for the whole HC64
         controller, not a unique ID of a circuit.
         """
-        return sha256(
-            b"\0".join([name.encode("utf-8") for name in await self.getCircuitNames()])
-        ).hexdigest()[:8]
+        return sha256(b"\0".join([name.encode("utf-8") for name in await self.getCircuitNames()])).hexdigest()[:8]
 
     @cached(LRUCache(maxsize=1))
     @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
@@ -188,9 +190,7 @@ class Bmr:
     async def getCircuitNames(self) -> List[str]:
         """Get the names of all heating circuits."""
         text = await self._post("listOfRooms")
-        return [
-            text[i: i + 13].strip() for i in range(0, len(text), 13)
-        ]
+        return [text[i : i + 13].strip() for i in range(0, len(text), 13)]
         # Example: F01 Byt      F02 Pokoj    F03 Loznice  F04 Koupelna F05 Det pokojF06 Chodba   F07 Kuchyne  F08 Obyvak   R01 Byt      R02 Pokoj    R03 Loznice  R04 Koupelna R05 Det pokojR06 Chodba   R07 Kuchyne  R08 Obyvak  # noqa
 
     async def setManualTemp(self, circuit_id: int, new_target: float, current_target: Optional[float] = None) -> bool:
@@ -216,11 +216,13 @@ class Bmr:
             else:
                 current_target = new_target  # this will create a zero offset
         offset = new_target - current_target
-        param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", int(abs(offset)*10))
+        param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", int(abs(offset) * 10))
 
         data = {"manualTemp": param}
-        _LOGGER.debug(f"Setting manual temperature for circuit {circuit_id} to {new_target}"
-                      f"from {current_target} using offset {offset}")
+        _LOGGER.debug(
+            f"Setting manual temperature for circuit {circuit_id} to {new_target}"
+            f"from {current_target} using offset {offset}"
+        )
         return "true" in await self._post("saveManualTemp", data)
 
     async def setTemperatureOverride(self, circuit_id: int, temperature: float, duration: Optional[float] = None):
@@ -237,11 +239,7 @@ class Bmr:
         else:
             stop_at = None
 
-        self.overrides[circuit_id] = TemperatureOverride(
-            temperature=temperature,
-            created_at=now,
-            stop_at=stop_at,
-        )
+        self.overrides[circuit_id] = TemperatureOverride(temperature=temperature, created_at=now, stop_at=stop_at,)
         await self.storeOverrides()
         await self.setManualTemp(circuit_id, temperature)
 
@@ -256,7 +254,7 @@ class Bmr:
         """Remove temperature override for a circuit."""
         if circuit_id in self.overrides:
             # this will revoke the override in the next getCircuit call
-            self.overrides[circuit_id].stop_at = datetime.now()-timedelta(seconds=1)
+            self.overrides[circuit_id].stop_at = datetime.now() - timedelta(seconds=1)
             # do the call
             await self.getCircuit(circuit_id)
         else:
@@ -321,11 +319,7 @@ class Bmr:
             re.VERBOSE,
         )
         if not match:
-            raise Exception(
-                "Server returned malformed data: {}. Try again later".format(
-                    room_status_text
-                )
-            )
+            raise Exception("Server returned malformed data: {}. Try again later".format(room_status_text))
         room_status = match.groupdict()
 
         # Sometimes some of the values are malformed, i.e. "00\x00\x00\x00" or "-1-1-"
@@ -372,9 +366,7 @@ class Bmr:
             except ValueError:
                 pass
 
-        for key in (
-            "warning",
-        ):
+        for key in ("warning",):
             try:
                 result[key] = int(room_status[key])
             except ValueError:
@@ -390,19 +382,24 @@ class Bmr:
             try:
                 override = self.overrides[circuit_id]
                 result["target_temperature"] = override.temperature
-                _LOGGER.debug(f"Reported temperature changed from {result['target_temperature_raw']}/{target}"
-                              f"to {override.temperature}.")
+                _LOGGER.debug(
+                    f"Reported temperature changed from {result['target_temperature_raw']}/{target}"
+                    f"to {override.temperature}."
+                )
                 if override.stop_at is None or override.stop_at > datetime.now():
                     # target_temperature should be set to the override's temperature
                     # but the unit is very slow and sometimes changes offset before the target temperature which
                     # messes things up. So we take our time...
 
-                    if target != override.temperature and \
-                       override.last_set < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
+                    if target != override.temperature and override.last_set < (
+                        datetime.now() - timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)
+                    ):
                         override.last_set = datetime.now()  # no need to storeOverrides() with this minor change
-                        _LOGGER.debug(f"Override check shows that the target temperature for circuit {circuit_id} "
-                                      f"should be {override.temperature} instead of "
-                                      f"{result['target_temperature_raw']}/{target}")
+                        _LOGGER.debug(
+                            f"Override check shows that the target temperature for circuit {circuit_id} "
+                            f"should be {override.temperature} instead of "
+                            f"{result['target_temperature_raw']}/{target}"
+                        )
                         # we have everything we need to set the manual offset of the temperature
                         await self.setManualTemp(circuit_id, override.temperature, result["scheduled_temperature"])
                 elif override.stop_at <= datetime.now():  # the override has expired
@@ -420,7 +417,7 @@ class Bmr:
                         # mark the override as disabled
                         self.overrides[circuit_id].disabled_at = datetime.now()
                         await self.storeOverrides()
-                    elif override.disabled_at < (datetime.now()-timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
+                    elif override.disabled_at < (datetime.now() - timedelta(seconds=TEMPERATURE_OVERRIDE_CHECK_DELAY)):
                         # the override will stay in the disabled state for some time to enforce the 0 offset
                         # once the override expires completely, we have to remove the override from the list
                         _LOGGER.debug(f"Override for {circuit_id} expired and will be deleted.")
@@ -452,11 +449,7 @@ class Bmr:
             re.VERBOSE,
         )
         if not match:
-            raise Exception(
-                "Server returned malformed data: {}. Try again later".format(
-                    response_text
-                )
-            )
+            raise Exception("Server returned malformed data: {}. Try again later".format(response_text))
         schedule = match.groupdict()
         timetable = None
         if schedule["timetable"]:
@@ -486,12 +479,7 @@ class Bmr:
             "modeSettings": "{:02d}{:13.13}{}".format(
                 schedule_id,
                 name[:13],
-                "".join(
-                    [
-                        "{}{:03d}".format(item["time"], int(item["temperature"]))
-                        for item in timetable
-                    ]
-                ),
+                "".join(["{}{:03d}".format(item["time"], int(item["temperature"])) for item in timetable]),
             )
         }
         return "true" in await self._post("saveMode", data)
@@ -526,11 +514,7 @@ class Bmr:
         try:
             return [bool(int(x)) for x in list(response_text)]
         except ValueError:
-            raise Exception(
-                "Server returned malformed data: {}. Try again later".format(
-                    response_text
-                )
-            )
+            raise Exception("Server returned malformed data: {}. Try again later".format(response_text))
 
     async def setSummerModeAssignments(self, circuits: List[int], value: bool) -> Optional[List[bool]]:
         """Assign or remove specified circuits to/from summer mode. Leave
@@ -564,11 +548,7 @@ class Bmr:
             re.VERBOSE,
         )
         if not match:
-            raise Exception(
-                "Server returned malformed data: {}. Try again later".format(
-                    response_text
-                )
-            )
+            raise Exception("Server returned malformed data: {}. Try again later".format(response_text))
         low_mode = match.groupdict()
         result: BmrLowModeData = {
             "enabled": low_mode["start_datetime"] is not None,
@@ -577,13 +557,9 @@ class Bmr:
             "end_date": None,
         }
         if low_mode["start_datetime"]:
-            result["start_date"] = datetime.strptime(
-                low_mode["start_datetime"], "%Y-%m-%d%H:%M"
-            )
+            result["start_date"] = datetime.strptime(low_mode["start_datetime"], "%Y-%m-%d%H:%M")
         if low_mode["end_datetime"]:
-            result["end_date"] = datetime.strptime(
-                low_mode["end_datetime"], "%Y-%m-%d%H:%M"
-            )
+            result["end_date"] = datetime.strptime(low_mode["end_datetime"], "%Y-%m-%d%H:%M")
         return result
 
     async def setLowMode(
@@ -591,7 +567,7 @@ class Bmr:
         enabled: bool,
         temperature: Optional[float] = None,
         start_datetime: Optional[datetime] = None,
-        end_datetime: Optional[datetime] = None
+        end_datetime: Optional[datetime] = None,
     ):
         """Enable or disable LOW mode. Temperature specified the desired
         temperature for the LOW mode.
@@ -608,16 +584,8 @@ class Bmr:
         data = {
             "lowData": "{:03d}{}{}".format(
                 int(temperature),
-                (
-                    start_datetime.strftime("%Y-%m-%d%H:%M")
-                    if enabled and start_datetime
-                    else " " * 15
-                ),
-                (
-                    end_datetime.strftime("%Y-%m-%d%H:%M")
-                    if enabled and end_datetime
-                    else " " * 15
-                ),
+                (start_datetime.strftime("%Y-%m-%d%H:%M") if enabled and start_datetime else " " * 15),
+                (end_datetime.strftime("%Y-%m-%d%H:%M") if enabled and end_datetime else " " * 15),
             )
         }
         return "true" in await self._post("lowSave", data)
@@ -671,20 +639,14 @@ class Bmr:
             re.VERBOSE,
         )
         if not match:
-            raise Exception(
-                "Server returned malformed data: {}. Try again later".format(
-                    response_text
-                )
-            )
+            raise Exception("Server returned malformed data: {}. Try again later".format(response_text))
         circuit_schedules = match.groupdict()
         result = {
             "starting_day": int(circuit_schedules["starting_day"]),
             "current_day": None,
             "day_schedules": [],
         }
-        for idx, schedule_id in enumerate(
-            re.findall(r"[-\d]{2}", circuit_schedules["day_schedules"])
-        ):
+        for idx, schedule_id in enumerate(re.findall(r"[-\d]{2}", circuit_schedules["day_schedules"])):
             schedule_id = int(schedule_id)
             if schedule_id == -1:
                 # The list of schedules must be continuous, there aren't
@@ -692,9 +654,7 @@ class Bmr:
                 # have to be are "-1" as well.
                 break
             else:
-                result["day_schedules"].append(
-                    schedule_id & 0b00011111
-                )  # schedule ID is in the lower 5 bits
+                result["day_schedules"].append(schedule_id & 0b00011111)  # schedule ID is in the lower 5 bits
                 if (
                     schedule_id & 0b00100000 == 0b00100000
                 ):  # 6th rightmost bit is indicator of currently active schedule
@@ -716,11 +676,7 @@ class Bmr:
         # Example: 000108-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1
         data = {
             "roomSettings": "{:02d}{:02d}{}".format(
-                circuit_id,
-                starting_day,
-                "".join(
-                    ["{:02d}".format(x if x is not None else -1) for x in day_schedules]
-                ),
+                circuit_id, starting_day, "".join(["{:02d}".format(x if x is not None else -1) for x in day_schedules]),
             )
         }
         return "true" in await self._post("saveAssignmentModes", data)
@@ -750,9 +706,7 @@ class Bmr:
         curl 'http://bmr-hc64.local/listOfRollerShutters' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' --data-raw 'param=+'
         """
         response_text = await self._post("listOfRollerShutters")
-        return [
-            response_text[i: i + 13].strip() for i in range(0, len(response_text), 13)
-        ]
+        return [response_text[i : i + 13].strip() for i in range(0, len(response_text), 13)]
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
     async def getWindSensorStatus(self):
@@ -765,25 +719,45 @@ class Bmr:
         return await self._post("windSensorStatus")
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
-    async def getWholeRollerShutter(self, shutter_id: int) -> dict:
+    async def getWholeRollerShutter(self, shutter_id: int) -> "BmrRollerShutterData":
         """
         Get the status of a single roller shutter.
-        Example API call:
-        curl 'http:///bmr-hc64.local/wholeRollerShutter' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' --data-raw 'rollerShutter=6'
-        Example API response:
-        '1Kuchyna      0000010000000000000'
+
+        Example API call::
+
+            curl 'http://bmr-hc64.local/wholeRollerShutter' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' --data-raw 'rollerShutter=6'
+
+        The API returns a fixed width string.  Only the name, position and
+        tilt are currently parsed.  The position is reported using BMR's
+        mapping (0=open, 1=closed, 2=\"sterbiny\", 3=half).  Tilt is
+        reported in the inverted 0-10 scale.  Both values are converted to
+        percentages for Home Assistant.
         """
         assert 0 <= shutter_id <= 32
         data = {"rollerShutter": str(shutter_id)}
         response_text = await self._post("wholeRollerShutter", data)
 
-        # TODO how is the response formatted?
-        ret = {
-            "name": response_text[1:14].strip(),
-            "pos": int(response_text[14:15]),
-            "tilt": int(response_text[15:17]),
+        name = response_text[1:14].strip()
+        bmr_pos = int(response_text[14:15])
+        bmr_tilt = int(response_text[15:17])
+
+        if bmr_pos == 0:
+            pos = 100
+        elif bmr_pos == 3:
+            pos = 50
+        elif bmr_pos == 2:
+            pos = 25
+        else:
+            pos = 0
+
+        tilt = max(0, min(100, 100 - (bmr_tilt * 100 // self.shutter_tilt_steps)))
+
+        return {
+            "id": shutter_id,
+            "name": name,
+            "position": pos,
+            "tilt": tilt,
         }
-        return ret
 
     async def saveManualChange(self, shutter_id: int, pos: int, tilt: int) -> bool:
         """
@@ -820,7 +794,8 @@ class Bmr:
             elif pos > 15:
                 bmr_pos = 2
 
-            bmr_tilt: int = int((100 - tilt) / 10)
+            bmr_tilt = int(round((100 - tilt) * self.shutter_tilt_steps / 100))
+            bmr_tilt = max(0, min(self.shutter_tilt_steps, bmr_tilt))
             data = {"manualChange": f"{shutter_id:02d}{bmr_pos:01d}{bmr_tilt:02d}"}
             response_text = await self._post("saveManualChange", data)
             _LOGGER.debug(f"data {data} response text {response_text}")
@@ -840,10 +815,7 @@ class Bmr:
         ppm = int(response_text[5:9])
         power = int(response_text[:3])
 
-        return {
-            "power": power,
-            "ppm": ppm
-        }
+        return {"power": power, "ppm": ppm}
 
     async def getAllData(self) -> "BmrAllData":
         """Get all data from the BMR controller."""
@@ -883,7 +855,15 @@ class Bmr:
         except Exception:
             pass
 
-        _LOGGER.debug(f"Got all data: {circuits}, {hdo}, {ventilation}, {summer_mode}, {low_mode}")
+        try:
+            roller_shutters = []
+            num_shutters = await self.getNumOfRollerShutters()
+            for shutter_id in range(num_shutters):
+                roller_shutters.append(await self.getWholeRollerShutter(shutter_id))
+        except Exception:
+            roller_shutters = None
+
+        _LOGGER.debug(f"Got all data: {circuits}, {hdo}, {ventilation}, {summer_mode}, {low_mode}, {roller_shutters}")
         _LOGGER.debug(f"Current overrides: {self.overrides}")
         return {
             "circuits": circuits,
@@ -891,21 +871,22 @@ class Bmr:
             "ventilation": ventilation,
             "summer_mode": summer_mode,
             "low_mode": low_mode,
+            "roller_shutters": roller_shutters,
         }
 
 
 class BmrCircuitData(TypedDict):
     id: int
-    enabled: bool   # True if the circuit is enabled
-    name: str       # name of the circuit
+    enabled: bool  # True if the circuit is enabled
+    name: str  # name of the circuit
     temperature: Optional[float]  # current temperature
     target_temperature: Optional[float]  # target temperature, including user_offset if applied
     scheduled_temperature: Optional[float]  # scheduled temperature
     user_offset: Optional[float]  # manual offset applied by the user to the scheduled temperature
-    max_offset: Optional[float]   # maximum user offset allowed by the system
-    heating: bool   # True if the circuit is currently heating
-    warning: int    # warning code
-    cooling: bool   # True if the circuit is currently cooling
+    max_offset: Optional[float]  # maximum user offset allowed by the system
+    heating: bool  # True if the circuit is currently heating
+    warning: int  # warning code
+    cooling: bool  # True if the circuit is currently cooling
     low_mode: bool  # True if low mode is applied to the circuit
     summer_mode: bool  # True if summer mode is applied to the circuit
     target_temperature_raw: Optional[float]  # the temperature as the unit passes it, no the modifications by overrides
@@ -921,9 +902,17 @@ class BmrLowModeData(TypedDict):
     end_date: Optional[datetime]
 
 
+class BmrRollerShutterData(TypedDict):
+    id: int
+    name: str
+    position: int
+    tilt: int
+
+
 class BmrAllData(TypedDict):
     circuits: List[BmrCircuitData]
     hdo: Optional[bool]
     ventilation: Optional[Dict[str, int]]
     summer_mode: Optional[bool]
     low_mode: Optional[BmrLowModeData]
+    roller_shutters: Optional[List[BmrRollerShutterData]]

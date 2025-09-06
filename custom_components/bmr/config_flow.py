@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant import config_entries
 
-from .const import DOMAIN, CannotConnect, CONF_CAN_COOL
+from .const import DOMAIN, CannotConnect, CONF_CAN_COOL, CONF_TILT_STEPS
 from .client import Bmr, AuthException
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): str,
         vol.Required(CONF_URL): str,
         vol.Required(CONF_CAN_COOL): bool,
+        vol.Optional(CONF_TILT_STEPS, default=10): vol.All(int, vol.Range(min=1, max=10)),
     }
 )
 
@@ -42,7 +43,14 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     # )
     # client = Client(data[CONF_USERNAME], data[CONF_PASSWORD], session)
     session = async_get_clientsession(hass)
-    client = Bmr(data[CONF_URL], data[CONF_USERNAME], data[CONF_PASSWORD], data.get(CONF_CAN_COOL, False), session)
+    client = Bmr(
+        data[CONF_URL],
+        data[CONF_USERNAME],
+        data[CONF_PASSWORD],
+        data.get(CONF_CAN_COOL, False),
+        session,
+        shutter_tilt_steps=data.get(CONF_TILT_STEPS, 10),
+    )
 
     num_circuits = await client.getNumCircuits()
     circuit_names = await client.getCircuitNames()
@@ -61,9 +69,7 @@ class BMRConfigFlow(ConfigFlow, domain=DOMAIN):
 
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> Any:
         """Handle the initial step."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -82,6 +88,4 @@ class BMRConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input.update(additional)
                 return self.async_create_entry(title="BMR", data=user_input)
 
-        return self.async_show_form(
-            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
-        )
+        return self.async_show_form(step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors)

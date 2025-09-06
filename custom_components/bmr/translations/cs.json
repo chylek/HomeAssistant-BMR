@@ -7,7 +7,8 @@
             "url": "URL",
             "username": "Uživatelské jméno",
             "password": "Heslo",
-            "can_cool": "Podporuje chlazení"
+            "can_cool": "Podporuje chlazení",
+            "tilt_steps": "Počet kroků náklonu"
           }
         }
       },
