@@ -7,7 +7,8 @@
           "url": "URL",
           "username": "Username",
           "password": "Password",
-          "can_cool": "Supports cooling"
+          "can_cool": "Supports cooling",
+          "tilt_steps": "Tilt steps"
         }
       }
     },
