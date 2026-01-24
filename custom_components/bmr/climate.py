@@ -210,13 +210,14 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # - Adding the circuit to summer mode
             # - Turning the summer mode ON
             #
-            # NOTE: Sometimes (usually) there are also other circuits assigned
-            # to summer mode, especially if this plugin is used for the first
-            # time. If there are also other circutis assigned to summer mode
-            # and summer mode is turned on they will be turned off too. Make
-            # sure to remove any circuits from the summer mode manually when
-            # using the plugin for the first time.
-            await self.coordinator.client.setSummerModeAssignments([self._idx], True)
+            # If the summer mode is currently OFF, we should reset the assignments
+            # to only include this circuit. This prevents other circuits (that might
+            # have been assigned to summer mode previously or externally) from
+            # being turned off unexpectedly.
+            if not self.coordinator.data.get("summer_mode"):
+                await self.coordinator.client.setSummerModeAssignments([self._idx], True, exclusive=True)
+            else:
+                await self.coordinator.client.setSummerModeAssignments([self._idx], True)
             await self.coordinator.client.setSummerMode(True)
         elif self.coordinator.data.get("summer_mode"):
             # Turn HVACMode.OFF off and restore normal operation.
