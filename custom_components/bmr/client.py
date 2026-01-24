@@ -532,12 +532,18 @@ class Bmr:
                 )
             )
 
-    async def setSummerModeAssignments(self, circuits: List[int], value: bool) -> Optional[List[bool]]:
+    async def setSummerModeAssignments(self, circuits: List[int], value: bool, exclusive: bool = False) -> Optional[List[bool]]:
         """Assign or remove specified circuits to/from summer mode. Leave
         other circuits as they are.
+
+        If exclusive is True, all other circuits are set to the opposite of value.
         """
-        _LOGGER.debug(f"Setting summer mode for circuits {circuits} to {value}")
-        assignments = await self.getSummerModeAssignments()
+        _LOGGER.debug(f"Setting summer mode for circuits {circuits} to {value} (exclusive={exclusive})")
+        if exclusive:
+            num_circuits = await self.getNumCircuits()
+            assignments = [not value] * num_circuits
+        else:
+            assignments = await self.getSummerModeAssignments()
 
         for circuit_id in circuits:
             assignments[circuit_id] = value

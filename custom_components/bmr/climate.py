@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import BmrEntity, BmrCoordinator
 from .client import BmrCircuitData
-from .const import DOMAIN, CONF_DATA_COORDINATOR
+from .const import DOMAIN, CONF_DATA_COORDINATOR, CONF_SUMMER_MODE_EXCLUSIVE
 
 from homeassistant.components.climate import ClimateEntity, ClimateEntityDescription, ClimateEntityFeature
 from homeassistant.components.climate.const import (
@@ -51,7 +51,8 @@ async def async_setup_entry(
                 ClimateEntityDescription(
                     name=f"{name}",
                     key=f"climate_{i}",
-                )
+                ),
+                config_entry
             )
         )
 
@@ -100,10 +101,11 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
           Assistant UI. Even several minutes.
       """
 
-    def __init__(self, coordinator: BmrCoordinator, idx: int, description: ClimateEntityDescription) -> None:
+    def __init__(self, coordinator: BmrCoordinator, idx: int, description: ClimateEntityDescription, config_entry: ConfigEntry) -> None:
 
         super().__init__(coordinator)
         self.entity_description = description
+        self._config_entry = config_entry
         self._attr_unique_id = f"{coordinator.unique_id}-climate-{idx}"
         self._idx = idx
         self._can_cool = coordinator.client.can_cool
@@ -210,13 +212,20 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # - Adding the circuit to summer mode
             # - Turning the summer mode ON
             #
-            # NOTE: Sometimes (usually) there are also other circuits assigned
-            # to summer mode, especially if this plugin is used for the first
-            # time. If there are also other circutis assigned to summer mode
-            # and summer mode is turned on they will be turned off too. Make
-            # sure to remove any circuits from the summer mode manually when
-            # using the plugin for the first time.
-            await self.coordinator.client.setSummerModeAssignments([self._idx], True)
+            # If the summer mode is currently OFF, we should reset the assignments
+            # to only include this circuit. This prevents other circuits (that might
+            # have been assigned to summer mode previously or externally) from
+            # being turned off unexpectedly.
+            #
+            # This behavior is configurable.
+            exclusive = self._config_entry.options.get(
+                CONF_SUMMER_MODE_EXCLUSIVE,
+                self._config_entry.data.get(CONF_SUMMER_MODE_EXCLUSIVE, False)
+            )
+            if exclusive and not self.coordinator.data.get("summer_mode"):
+                await self.coordinator.client.setSummerModeAssignments([self._idx], True, exclusive=True)
+            else:
+                await self.coordinator.client.setSummerModeAssignments([self._idx], True)
             await self.coordinator.client.setSummerMode(True)
         elif self.coordinator.data.get("summer_mode"):
             # Turn HVACMode.OFF off and restore normal operation.
