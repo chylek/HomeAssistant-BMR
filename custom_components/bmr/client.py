@@ -26,6 +26,10 @@ DEFAULT_HEADERS = {"Content-Type": "application/x-www-form-urlencoded; charset=U
 DEFAULT_REQ_DATA = {"param": "+"}
 
 
+def round_to_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
 class AuthException(Exception):
     pass
 
@@ -222,7 +226,8 @@ class Bmr:
                 current_target = current_settings["scheduled_temperature"]
             else:
                 current_target = new_target  # this will create a zero offset
-        offset = new_target - current_target
+        # the controller works in 0.5 °C steps, its own web UI rounds the target to half a degree too
+        offset = round_to_half(new_target - current_target)
         param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", round(abs(offset)*10))
 
         data = {"manualTemp": param}
@@ -237,6 +242,8 @@ class Bmr:
             circuit_id: ID of the circuit.
             temperature: New target temperature.
             duration: Duration of the override in seconds. If not provided, the override will be active indefinitely."""
+        # store what the controller will actually show, otherwise the override check would re-send it forever
+        temperature = round_to_half(temperature)
         _LOGGER.debug(f"Setting temperature override for circuit {circuit_id} to {temperature}°C")
         now = datetime.now()
         if duration is not None:

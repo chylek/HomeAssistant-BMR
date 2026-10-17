@@ -152,6 +152,10 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         return TEMP_MIN  # TODO configurable
 
     @property
+    def target_temperature_step(self):
+        return 0.5  # the controller only accepts half degrees
+
+    @property
     def max_temp(self):
         return TEMP_MAX  # TODO configurable
 
