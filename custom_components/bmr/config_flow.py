@@ -57,8 +57,9 @@ class BMRConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                if user_input[CONF_URL].endswith("/"):
-                    user_input[CONF_URL] = user_input[CONF_URL][:-1]
+                user_input[CONF_URL] = user_input[CONF_URL].strip().rstrip("/")
+                if "://" not in user_input[CONF_URL]:
+                    user_input[CONF_URL] = "http://" + user_input[CONF_URL]
                 additional = await validate_input(self.hass, user_input)
             except CannotConnect:
                 errors["base"] = "cannot_connect"
