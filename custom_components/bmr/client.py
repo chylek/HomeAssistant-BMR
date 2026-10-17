@@ -133,7 +133,9 @@ class Bmr:
                                          headers=headers,
                                          timeout=TIMEOUT) as response:
                 resp = await response.text()
-                if resp.strip() == "" or resp.strip() == "\0":
+                # A controller that is not logged in (e.g. after it restarts) answers every request
+                # with a string of NUL characters instead of the data.
+                if resp.replace("\0", "").strip() == "":
                     raise Exception("Empty response - need to re-authenticate")
                 return resp
         except Exception:
