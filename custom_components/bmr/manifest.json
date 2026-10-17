@@ -6,7 +6,7 @@
     "codeowners": ["@slesinger", "@chylek"],
     "config_flow": true,
     "iot_class": "local_polling",
-    "version": "2.3.0",
+    "version": "2.3.1",
     "requirements": ["cachetools", "asyncache", "backoff"],
     "translations": ["translations"]
   }
