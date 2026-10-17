@@ -26,9 +26,18 @@ DEFAULT_HEADERS = {"Content-Type": "application/x-www-form-urlencoded; charset=U
 DEFAULT_REQ_DATA = {"param": "+"}
 
 
+def round_to_half(value: float) -> float:
+    return round(value * 2) / 2
+
+
 class AuthException(Exception):
     pass
 
+
+BMR_SHUTTER_OPEN = 0
+BMR_SHUTTER_CLOSED = 1
+BMR_SHUTTER_SLITS = 2
+BMR_SHUTTER_INTERMEDIATE = 3
 
 TEMPERATURE_OVERRIDE_CHECK_DELAY = 300  # seconds, how much time to wait before checking for new temperature overrides
 
@@ -217,8 +226,9 @@ class Bmr:
                 current_target = current_settings["scheduled_temperature"]
             else:
                 current_target = new_target  # this will create a zero offset
-        offset = new_target - current_target
-        param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", int(abs(offset)*10))
+        # the controller works in 0.5 °C steps, its own web UI rounds the target to half a degree too
+        offset = round_to_half(new_target - current_target)
+        param = "{:02}{}{:03}".format(circuit_id, "-" if offset < 0 else "0", round(abs(offset)*10))
 
         data = {"manualTemp": param}
         _LOGGER.debug(f"Setting manual temperature for circuit {circuit_id} to {new_target}"
@@ -232,6 +242,8 @@ class Bmr:
             circuit_id: ID of the circuit.
             temperature: New target temperature.
             duration: Duration of the override in seconds. If not provided, the override will be active indefinitely."""
+        # store what the controller will actually show, otherwise the override check would re-send it forever
+        temperature = round_to_half(temperature)
         _LOGGER.debug(f"Setting temperature override for circuit {circuit_id} to {temperature}°C")
         now = datetime.now()
         if duration is not None:
@@ -333,7 +345,7 @@ class Bmr:
         # Sometimes some of the values are malformed, i.e. "00\x00\x00\x00" or "-1-1-"
         result: BmrCircuitData = {
             "id": circuit_id,
-            "enabled": bool(int(room_status["enabled"])),
+            "enabled": room_status["enabled"] == "1",
             "name": room_status["name"].rstrip(),
             "temperature": None,
             "target_temperature": None,
@@ -385,7 +397,10 @@ class Bmr:
         result["target_temperature_raw"] = result["target_temperature"]
 
         # the target temperature computation on BMR is slow, so we use scheduled temperature + offset
-        result["target_temperature"] = target = result["scheduled_temperature"] + result["user_offset"]
+        if result["scheduled_temperature"] is None or result["user_offset"] is None:
+            # a malformed field must not fail the whole update, keep the unit's own target and skip the override check
+            return result
+        result["target_temperature"] = target = round(result["scheduled_temperature"] + result["user_offset"], 1)
         # if overrides are active, we will change what's shown again and even try to enforce the override
         if not skip_override_check and circuit_id in self.overrides:
             _LOGGER.debug(f"Circuit {circuit_id} has an override")
@@ -766,71 +781,72 @@ class Bmr:
         """
         return await self._post("windSensorStatus")
 
-    @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
-    async def getWholeRollerShutter(self, shutter_id: int) -> dict:
+    async def getWholeRollerShutter(self, shutter_id: int) -> "BmrRollerShutterData":
         """
         Get the status of a single roller shutter.
-        Example API call:
-        curl 'http:///bmr-hc64.local/wholeRollerShutter' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' --data-raw 'rollerShutter=6'
-        Example API response:
-        '1Kuchyna      0000010000000000000'
-        """
-        assert 0 <= shutter_id <= 32
-        data = {"rollerShutter": str(shutter_id)}
-        response_text = await self._post("wholeRollerShutter", data)
 
-        # TODO how is the response formatted?
-        ret = {
-            "name": response_text[1:14].strip(),
-            "pos": int(response_text[14:15]),
-            "tilt": int(response_text[15:17]),
+        Offsets follow the controller's own web UI (functions.js, loadWholeRS). Example response:
+          112 Studio V  0760010000000760000
+          [0] enabled: 0 disabled, 1 enabled, 2 enabled with tiltable slats
+          [1:14] name, [14:17] actual position in %, [17] requested position (BMR_SHUTTER_*),
+          [18] central, [19] manual change, [20] error, [21:24] validity, [24:26] requested tilt,
+          [26:29] manual position in %, [29:31] manual tilt, [31:33] actual tilt (0 horizontal - 10 vertical)
+        """
+        text = await self._post("wholeRollerShutter", {"rollerShutter": str(shutter_id)})
+        if len(text) < 33:
+            raise Exception(f"Server returned malformed data: {text}. Try again later")
+
+        def num(start: int, end: int) -> int:
+            try:
+                return int(text[start:end])
+            except ValueError:
+                return 0
+
+        return {
+            "id": shutter_id,
+            "enabled": text[0] in ("1", "2"),
+            "has_tilt": text[0] == "2",
+            "name": text[1:14].strip(),
+            "position": num(14, 17),
+            "requested_position": num(17, 18),
+            "error": num(20, 21),
+            "tilt": num(31, 33),
         }
-        return ret
 
-    async def saveManualChange(self, shutter_id: int, pos: int, tilt: int) -> bool:
+    async def saveManualChange(self, shutter_id: int, bmr_pos: int, bmr_tilt: int) -> bool:
         """
-        Set shutter blind to a specific position.
+        Move a roller shutter. The controller only accepts one of four positions, the exact
+        percentage for slits and intermediate position is configured in the BMR service menu.
 
-        Formatting of the request data:
-        0-1: blind ID, starts from 0, simple decimal number, no bitmask - can't change multiple blinds with a single call
-        2: position. It maps from 100 fully open to 0 fully closed to:
-            0: open / otevreno (fully pulled up)
-            1: closed / zavreno (fully lowered down)
-            2: sits / sterbiny (3/4 down )
-            3: half / mezipoloha (in the middle)
-        3-4: tilt: It maps from 100 fully open to 0 fully closed to: <0 - 10>
-            0: open - segments horizontally, mamimum light passing through
-            10: closed - segments vertically, mimimum light pasing through
-            One step translates to a minimal impulse to the motors to open/close the blinds.
-            With my motors, 5 steps are enough to go from fully open to fully closed.
-            Position is relative. When going from 10 when closed to 5, blinds fully open, Same when going from 5 to 0.
+        Args:
+            shutter_id: ID of the shutter, starting from 0.
+            bmr_pos: one of BMR_SHUTTER_OPEN, BMR_SHUTTER_CLOSED, BMR_SHUTTER_SLITS, BMR_SHUTTER_INTERMEDIATE.
+            bmr_tilt: slat tilt, 0 (horizontal, most light) - 10 (vertical, least light).
 
-        Example call:
-        curl 'http://bmr-hc64.local/saveManualChange' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
-        --data-raw 'manualChange=07200'
+        Notes from a user with real blinds: slits is about 3/4 down, intermediate about half way.
+        One tilt step is a minimal impulse to the motor; 5 steps were enough to go from fully open
+        to fully closed with their motors.
+
+        Example request data: manualChange=07200 (shutter 7, slits, tilt 0)
         """
+        data = {"manualChange": f"{shutter_id:02d}{bmr_pos:01d}{bmr_tilt:02d}"}
+        response_text = await self._post("saveManualChange", data)
+        _LOGGER.debug(f"data {data} response text {response_text}")
+        return "true" in response_text
+
+    @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
+    async def getOutdoorTemperature(self) -> Optional[float]:
+        """Outdoor temperature from the WTR01 module, None if the module is not used.
+
+        Example responses: "107+32.0" (active, mode 07, +32.0 °C), "0-1???" (no module).
+        """
+        text = await self._post("wtr01Settings", {"param": " "})
+        if text[:1] != "1":
+            return None
         try:
-            assert 0 <= shutter_id <= 32
-            assert 0 <= pos <= 100
-            assert 0 <= tilt <= 100
-
-            bmr_pos: int = 1
-            if pos > 90:
-                bmr_pos = 0
-            elif pos > 45:
-                bmr_pos = 3
-            elif pos > 15:
-                bmr_pos = 2
-
-            bmr_tilt: int = int((100 - tilt) / 10)
-            data = {"manualChange": f"{shutter_id:02d}{bmr_pos:01d}{bmr_tilt:02d}"}
-            response_text = await self._post("saveManualChange", data)
-            _LOGGER.debug(f"data {data} response text {response_text}")
-            ret = "true" in response_text
-            return ret
-        except Exception as e:
-            print(e)
-            return False
+            return float(text[3:8])
+        except ValueError:
+            return None
 
     @cached(TTLCache(maxsize=1, ttl=CACHE_DEFAULT_TTL))
     @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
@@ -873,6 +889,16 @@ class Bmr:
             low_mode = await self.getLowMode()
         except Exception:
             low_mode = None
+        try:
+            outdoor_temperature = await self.getOutdoorTemperature()
+        except Exception:
+            outdoor_temperature = None
+        shutters: List[BmrRollerShutterData] = []
+        try:
+            for shutter_id in range(await self.getNumOfRollerShutters()):
+                shutters.append(await self.getWholeRollerShutter(shutter_id))
+        except Exception:
+            _LOGGER.debug("Error while loading roller shutters", exc_info=True)
 
         try:
             for idx, assigned in enumerate(await self.getSummerModeAssignments()):
@@ -893,6 +919,8 @@ class Bmr:
             "ventilation": ventilation,
             "summer_mode": summer_mode,
             "low_mode": low_mode,
+            "outdoor_temperature": outdoor_temperature,
+            "shutters": shutters,
         }
 
 
@@ -929,3 +957,16 @@ class BmrAllData(TypedDict):
     ventilation: Optional[Dict[str, int]]
     summer_mode: Optional[bool]
     low_mode: Optional[BmrLowModeData]
+    outdoor_temperature: Optional[float]
+    shutters: List["BmrRollerShutterData"]
+
+
+class BmrRollerShutterData(TypedDict):
+    id: int
+    enabled: bool
+    has_tilt: bool  # True if the shutter has tiltable slats (blinds)
+    name: str
+    position: int  # actual position in %, as reported by the controller
+    requested_position: int  # BMR_SHUTTER_* the controller is moving to / holding
+    error: int  # error from the last communication with the shutter module, 0 = OK
+    tilt: int  # actual tilt 0 (horizontal) - 10 (vertical)

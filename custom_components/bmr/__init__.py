@@ -5,6 +5,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform, CONF_PASSWORD, CONF_USERNAME, CONF_URL
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
@@ -18,11 +19,11 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.SENSOR,
     Platform.CLIMATE,
+    Platform.COVER,
     Platform.SWITCH,
 ]
 
 
-# TODO Update entry annotation
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # load overrides from storage:
     store = Store(hass, 1, f"bmr_overrides_{entry.entry_id}")
@@ -31,8 +32,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                  entry.data[CONF_PASSWORD], entry.data.get(CONF_CAN_COOL, False),
                  async_get_clientsession(hass), overrides, store)
 
-    coordinator = BmrCoordinator(hass, client)
-    coordinator.unique_id = await client.getUniqueId()
+    coordinator = BmrCoordinator(hass, entry, client)
+    try:
+        coordinator.unique_id = await client.getUniqueId()
+    except Exception as err:
+        # e.g. HA started before the controller is reachable - let HA retry the setup later
+        raise ConfigEntryNotReady(f"Cannot reach the BMR controller: {err}") from err
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {CONF_DATA_COORDINATOR: coordinator}
 
@@ -43,7 +48,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-# TODO Update entry annotation
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -52,11 +56,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class BmrCoordinator(DataUpdateCoordinator[BmrAllData]):
     """My custom coordinator."""
 
-    def __init__(self, hass: HomeAssistant, client: Bmr) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: Bmr) -> None:
         """Initialize my coordinator."""
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             # Name of the data. For logging purposes.
             name=DOMAIN,
             # Polling interval. Will only be polled if there are subscribers.
