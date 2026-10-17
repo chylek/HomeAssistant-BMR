@@ -107,14 +107,12 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         self._attr_unique_id = f"{coordinator.unique_id}-climate-{idx}"
         self._idx = idx
         self._can_cool = coordinator.client.can_cool
-        # check if TURN_OFF is a possible value of ClimateEntityFeature
-
-        self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
-        if "TURN_OFF" in ClimateEntityFeature.__members__:
-            self._enable_turn_on_off_backwards_compatibility = False
-            self._attr_supported_features |= ClimateEntityFeature.__members__["TURN_OFF"].value | ClimateEntityFeature.__members__["TURN_ON"].value
-        else:
-            self._enable_turn_on_off_backwards_compatibility = True
+        self._attr_supported_features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TURN_OFF
+            | ClimateEntityFeature.TURN_ON
+        )
 
     @property
     def circuit(self) -> Union[BmrCircuitData, None]:

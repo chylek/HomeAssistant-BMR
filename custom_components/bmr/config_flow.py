@@ -11,7 +11,6 @@ from homeassistant.config_entries import ConfigFlow
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant import config_entries
 
 from .const import DOMAIN, CannotConnect, CONF_CAN_COOL
 from .client import Bmr, AuthException
@@ -33,14 +32,6 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
     """
-    # TODO validate the data can be used to set up a connection.
-
-    # If your PyPI package is not built with async, pass your methods
-    # to the executor:
-    # await hass.async_add_executor_job(
-    #     your_validate_func, data[CONF_USERNAME], data[CONF_PASSWORD]
-    # )
-    # client = Client(data[CONF_USERNAME], data[CONF_PASSWORD], session)
     session = async_get_clientsession(hass)
     client = Bmr(data[CONF_URL], data[CONF_USERNAME], data[CONF_PASSWORD], data.get(CONF_CAN_COOL, False), session)
 
@@ -58,8 +49,6 @@ class BMRConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for BMR."""
 
     VERSION = 1
-
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

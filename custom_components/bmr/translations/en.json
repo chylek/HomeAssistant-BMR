@@ -29,6 +29,9 @@
     "sensor": {
       "ventilation_speed": {
         "name": "Ventilation"
+      },
+      "outdoor_temperature": {
+        "name": "Outdoor temperature"
       }
     },
     "switch": {

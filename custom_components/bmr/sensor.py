@@ -10,8 +10,9 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
 )
 
-from homeassistant.const import PERCENTAGE, CONCENTRATION_PARTS_PER_MILLION
+from homeassistant.const import PERCENTAGE, CONCENTRATION_PARTS_PER_MILLION, UnitOfTemperature
 from homeassistant.helpers.typing import StateType
+from typing import Optional
 
 
 from . import BmrEntity, BmrCoordinator
@@ -35,6 +36,7 @@ async def async_setup_entry(
                 key="co2",
                 icon="mdi:air-filter",
                 device_class=SensorDeviceClass.CO2,
+                state_class=SensorStateClass.MEASUREMENT,
                 native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
             ),
             "ventilation", "ppm"
@@ -52,19 +54,35 @@ async def async_setup_entry(
             "ventilation", "power"
         )
     ]
+    if coordinator.data and coordinator.data.get("outdoor_temperature") is not None:
+        # only units with the WTR01 module report outdoor temperature
+        entities.append(
+            BmrSensor(
+                coordinator,
+                SensorEntityDescription(
+                    name="Outdoor temperature",
+                    key="outdoor_temperature",
+                    device_class=SensorDeviceClass.TEMPERATURE,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+                    translation_key="outdoor_temperature",
+                ),
+                "outdoor_temperature", None
+            )
+        )
 
     async_add_entities(entities)
 
 
 class BmrSensor(SensorEntity, BmrEntity):
-    """ Sensor for reporting ventilation status.
+    """ Sensor for reporting ventilation status and outdoor temperature.
     """
 
     def __init__(self,
                  coordinator: BmrCoordinator,
                  description: SensorEntityDescription,
                  bmr_data_key: str,
-                 bmr_data_subkey: str
+                 bmr_data_subkey: Optional[str]
                  ) -> None:
 
         super().__init__(coordinator)
@@ -79,6 +97,9 @@ class BmrSensor(SensorEntity, BmrEntity):
         if self.coordinator.data is None:
             return None
         try:
-            return self.coordinator.data.get(self.bmr_data_key, {}).get(self.bmr_data_subkey)
+            value = self.coordinator.data.get(self.bmr_data_key)
+            if self.bmr_data_subkey is None:
+                return value
+            return value.get(self.bmr_data_subkey)
         except Exception:
             return None

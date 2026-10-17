@@ -29,6 +29,9 @@
       "sensor": {
         "ventilation_speed": {
           "name": "Ventilace"
+        },
+        "outdoor_temperature": {
+          "name": "Venkovní teplota"
         }
       },
       "switch": {

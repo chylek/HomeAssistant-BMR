@@ -4,8 +4,10 @@
     "domains": [
       "climate",
       "sensor",
-      "binary_sensor"
+      "binary_sensor",
+      "switch",
+      "cover"
     ],
     "country": "CZ",
-    "homeassistant": "2024.7.3"
+    "homeassistant": "2024.11.0"
 }
