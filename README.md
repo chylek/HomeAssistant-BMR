@@ -5,7 +5,6 @@ This is a fork and WORK IN PROGRESS. The original plugin is available [here](htt
 Documentation is not fully updated yet, but the plugin is working with the latest Home Assistant version and
 the configuration is done via the UI.
 
-Temperature entities are gone, only climate entities and binary sensors are available.
 Every circuit is automatically added as a climate entity, and a binary sensor is added for HDO state.
 Schedules cannot be changed from Home Assistant, only the target temperature can be changed. 
 
@@ -39,7 +38,15 @@ The integration is configurable through the Home Assistant UI.
 1. Navigate to **Settings -> Devices & Services -> Add Integration**.
 2. Select **BMR HC64**.
 3. Enter the controller’s URL, username, and password. Check the box if your system supports cooling (and not only heating). 
+   The URL is the address you open the BMR web interface with, e.g. `http://192.168.1.113`, including the port if the
+   web server doesn't run on port 80 (e.g. `http://192.168.2.200:20500`). `http://` is added if you leave it out.
 4. Complete the setup.
+
+You don't need to be logged in to the BMR web interface while adding the integration - it logs in by itself.
+
+**Note:** the BMR controller has a single, global login. A BMR web interface left open and idle in a browser logs the
+controller out after 15 minutes, for everyone including Home Assistant. The integration logs in again at its next
+update, so you may see one failed update in the log, but it's better to close the BMR web interface when you're done.
 
 ## Provided Entities
 ### Binary Sensors
@@ -48,6 +55,12 @@ The integration is configurable through the Home Assistant UI.
 ### Sensors
 - **Ventilation**: Ventilation speed.
 - **CO2**: CO2 level in PPM.
+- **Outdoor temperature**: Temperature from the WTR01 module. Only created if the module is installed.
+
+### Covers
+- Each roller shutter is represented as a cover entity (blinds with tiltable slats also support tilt).
+- The controller only accepts four positions: open, closed, slits and intermediate (the last two are configured in the
+  BMR service menu), so the position slider moves the shutter to the nearest one. The actual position is reported in %.
 
 ### Climate Devices
 - Each heating circuit is represented as a climate entity in Home Assistant.

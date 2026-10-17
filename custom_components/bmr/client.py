@@ -142,10 +142,13 @@ class Bmr:
                                          headers=headers,
                                          timeout=TIMEOUT) as response:
                 resp = await response.text()
-                # A controller that is not logged in (e.g. after it restarts) answers every request
-                # with a string of NUL characters instead of the data.
+                # A controller that is not logged in (e.g. after it restarts, or after an idle web UI tab sent
+                # "timeout") answers every request with a string of NUL characters, some firmwares with the
+                # HTML login page instead of the data.
                 if resp.replace("\0", "").strip() == "":
                     raise Exception("Empty response - need to re-authenticate")
+                if resp.lstrip().lower().startswith(("<!doctype", "<html")):
+                    raise Exception("HTML page instead of data - need to re-authenticate")
                 return resp
         except Exception:
             _LOGGER.debug(f"Error while posting to {url}", exc_info=True)
