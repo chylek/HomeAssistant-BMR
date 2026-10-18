@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta
 from hashlib import sha256
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import backoff
 from aiohttp import ClientSession, FormData
@@ -561,19 +561,24 @@ class Bmr:
                 )
             )
 
-    async def setCircuitSummerMode(self, circuit_id: int, value: bool) -> None:
+    async def setCircuitSummerMode(self, circuit_id: int, value: bool) -> Tuple[List[bool], bool]:
         """Turn a circuit off (assign it to summer mode and turn summer mode on) or back on (remove it from summer
-        mode, turn summer mode off if no circuit is assigned anymore). Other circuits' assignments are kept."""
+        mode, turn summer mode off if no circuit is assigned anymore). Other circuits' assignments are kept.
+
+        Returns the new assignments and whether summer mode is on."""
         async with self._assignment_lock:
             assignments = list(await self.getSummerModeAssignments())
             assignments[circuit_id] = value
             _LOGGER.debug(f"Setting summer mode for circuit {circuit_id} to {value}, assignments {assignments}")
             await self._post("letoSaveRooms", {"value": "".join(str(int(x)) for x in assignments)})
-            if value:
-                if not await self.getSummerMode():
-                    await self.setSummerMode(True)
-            elif not any(assignments):
+            summer_on = await self.getSummerMode()
+            if value and not summer_on:
+                await self.setSummerMode(True)
+                summer_on = True
+            elif not value and summer_on and not any(assignments):
                 await self.setSummerMode(False)
+                summer_on = False
+            return assignments, summer_on
 
     @backoff.on_exception(backoff.expo, Exception, max_tries=BACKOFF_TRIES)
     async def getLowMode(self) -> "BmrLowModeData":
@@ -655,19 +660,24 @@ class Bmr:
         response_text = await self._post("lowLoadRooms")
         return [bool(int(x)) for x in list(response_text)]
 
-    async def setCircuitLowMode(self, circuit_id: int, value: bool) -> None:
+    async def setCircuitLowMode(self, circuit_id: int, value: bool) -> Tuple[List[bool], bool]:
         """Put a circuit into LOW (away) mode (assign it and turn LOW mode on) or back to normal (remove it, turn LOW
-        mode off if no circuit is assigned anymore). Other circuits' assignments are kept."""
+        mode off if no circuit is assigned anymore). Other circuits' assignments are kept.
+
+        Returns the new assignments and whether LOW mode is on."""
         async with self._assignment_lock:
             assignments = list(await self.getLowModeAssignments())
             assignments[circuit_id] = value
             _LOGGER.debug(f"Setting LOW mode for circuit {circuit_id} to {value}, assignments {assignments}")
             await self._post("lowSaveRooms", {"value": "".join(str(int(x)) for x in assignments)})
-            if value:
-                if not (await self.getLowMode())["enabled"]:
-                    await self.setLowMode(True)
-            elif not any(assignments):
+            low_on = (await self.getLowMode())["enabled"]
+            if value and not low_on:
+                await self.setLowMode(True)
+                low_on = True
+            elif not value and low_on and not any(assignments):
                 await self.setLowMode(False)
+                low_on = False
+            return assignments, low_on
 
     @cached(TTLCache(maxsize=CACHE_DEFAULT_MAXSIZE, ttl=CACHE_DEFAULT_TTL))
     async def getCircuitSchedules(self, circuit_id):

@@ -3,7 +3,7 @@ Support for BMR HC64 Heating Regulation.
 """
 
 import logging
-from typing import Optional, Union
+from typing import List, Optional, Union
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -232,14 +232,14 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # and summer mode is turned on they will be turned off too. Make
             # sure to remove any circuits from the summer mode manually when
             # using the plugin for the first time.
-            await self.coordinator.client.setCircuitSummerMode(self._idx, True)
+            self._apply_mode_change("summer", *await self.coordinator.client.setCircuitSummerMode(self._idx, True))
         elif self._is_off:
             # Turn HVACMode.OFF off and restore normal operation.
             #
             # - Remove the circuit from the summer mode assignments
             # - If there aren't any circuits assigned to summer mode anymore
             #   turn the summer mode OFF.
-            await self.coordinator.client.setCircuitSummerMode(self._idx, False)
+            self._apply_mode_change("summer", *await self.coordinator.client.setCircuitSummerMode(self._idx, False))
 
         if hvac_mode in (HVACMode.HEAT, HVACMode.HEAT_COOL):
             # Turn on the HVACMode.HEAT. This will assign the "override"
@@ -265,6 +265,8 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
             # Turn on the HVACMode.AUTO. Currently this is no-op, as the
             # normal operation is restored in the else branches above.
             pass
+        # AUTO/HEAT follow the override state right away, show it before the (possibly delayed) refresh
+        self.coordinator.async_update_listeners()
         # since we've made some requests to the controller we better fetch the new state
         await self.coordinator.async_request_refresh()
 
@@ -308,10 +310,27 @@ class BmrClimateEntity(ClimateEntity, BmrEntity):
         """
         if preset_mode == PRESET_AWAY:
             await self.coordinator.client.removeTemperatureOverride(self._idx)
-            await self.coordinator.client.setCircuitLowMode(self._idx, True)
+            self._apply_mode_change("low", *await self.coordinator.client.setCircuitLowMode(self._idx, True))
         else:
-            await self.coordinator.client.setCircuitLowMode(self._idx, False)
+            self._apply_mode_change("low", *await self.coordinator.client.setCircuitLowMode(self._idx, False))
         await self.coordinator.async_request_refresh()
+
+    def _apply_mode_change(self, mode: str, assignments: List[bool], enabled: bool) -> None:
+        """Put the result of a summer/low mode change into the coordinator data and update all entities at once
+        (e.g. every circuit assigned to summer mode shows OFF when summer mode turns on), instead of waiting for the
+        next refresh, which HA may delay by several seconds."""
+        data = self.coordinator.data
+        if not data:
+            return
+        for circuit, assigned in zip(data.get("circuits", []), assignments):
+            circuit[f"{mode}_mode_assigned"] = assigned
+        if mode == "summer":
+            data["summer_mode"] = enabled
+        elif data.get("low_mode") is not None:
+            data["low_mode"]["enabled"] = enabled
+        else:
+            data["low_mode"] = {"enabled": enabled, "temperature": None, "start_date": None, "end_date": None}
+        self.coordinator.async_update_listeners()
 
     async def async_set_temperature(self, **kwargs):
         """ Set new target temperature for the circuit. This works by
